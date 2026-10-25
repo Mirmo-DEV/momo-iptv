@@ -1,207 +1,238 @@
 package com.momo.iptv.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
 import com.momo.iptv.AppViewModel
+import com.momo.iptv.data.Episode
 import com.momo.iptv.data.Season
 import com.momo.iptv.data.VodItem
-import kotlinx.coroutines.launch
 
 @Composable
 fun SeriesScreen(vm: AppViewModel, series: VodItem) {
     BackHandler { vm.closeSeries() }
     val seasons = vm.seasons
+    val playFocus = remember { FocusRequester() }
 
     Box(Modifier.fillMaxSize()) {
-    HeroBackdrop(series.backdrop ?: series.poster, height = 330.dp)
-    Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 28.dp)) {
-        Row(verticalAlignment = Alignment.Top) {
-            if (series.poster != null) {
-                AsyncImage(
-                    model = series.poster,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(100.dp, 150.dp).shadow(18.dp, RoundedCornerShape(10.dp)).clip(RoundedCornerShape(10.dp)),
-                )
-                Spacer(Modifier.width(26.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Text(series.name, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        HeroBackdrop(series.backdrop ?: series.poster)
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 40.dp, bottom = 20.dp)) {
+            Column(Modifier.padding(horizontal = 64.dp).fillMaxWidth(0.6f)) {
+                Text(series.name, fontSize = 42.sp, fontWeight = FontWeight.ExtraBold, lineHeight = 48.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 MetaChips(
-                    listOfNotNull(series.year, series.genre, seasons?.let { "${it.size} saison" + if (it.size > 1) "s" else "" }),
+                    listOfNotNull("Série", series.year, series.genre, seasons?.takeIf { it.isNotEmpty() }?.let { "${it.size} saison" + if (it.size > 1) "s" else "" }),
                     series.rating,
-                    Modifier.padding(top = 8.dp),
+                    Modifier.padding(top = 12.dp),
                 )
                 series.description?.let {
-                    Text(it, fontSize = 15.sp, color = Palette.Text.copy(alpha = 0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 22.sp, modifier = Modifier.padding(top = 10.dp))
+                    Text(it, fontSize = 16.sp, lineHeight = 23.sp, color = Palette.Text.copy(alpha = 0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 12.dp))
                 }
-                Row(Modifier.padding(top = 12.dp)) {
-                    TvButton(if (vm.inWatchlist(series)) "✓  Dans ma liste" else "＋  Ma liste", { vm.toggleWatchlist(series) })
+            }
+            Spacer(Modifier.height(22.dp))
+            when {
+                seasons != null && seasons.isNotEmpty() -> SeasonsAndEpisodes(vm, series, seasons, playFocus)
+                vm.seasonsError != null -> Box(Modifier.padding(horizontal = 64.dp)) {
+                    Retry(vm.seasonsError.orEmpty()) { vm.openVod(series) }
+                }
+                else -> Row(Modifier.padding(horizontal = 64.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    repeat(5) { Skeleton(Modifier.width(220.dp).height(124.dp)) }
                 }
             }
         }
-        Spacer(Modifier.height(16.dp))
-        when {
-            seasons != null && seasons.isNotEmpty() -> SeasonsAndEpisodes(vm, series, seasons)
-            vm.seasonsError != null -> Retry(vm.seasonsError.orEmpty()) { vm.openVod(series) }
-            else -> Loading("Chargement des épisodes…")
-        }
-    }
     }
 }
 
 @Composable
-private fun SeasonsAndEpisodes(vm: AppViewModel, series: VodItem, seasons: List<Season>) {
-    val seasonIndex = vm.seriesSeason.coerceIn(0, seasons.lastIndex)
-    val season = seasons[seasonIndex]
-    val episodeIndex = vm.seriesEpisode.coerceIn(0, season.episodes.lastIndex)
-    val seasonState = rememberLazyListState()
-    val episodeState = remember(seasonIndex) { LazyListState((episodeIndex - 3).coerceAtLeast(0)) }
-    val seasonFocus = remember { FocusRequester() }
-    val episodeFocus = remember { FocusRequester() }
-    val scope = rememberCoroutineScope()
+private fun SeasonsAndEpisodes(vm: AppViewModel, series: VodItem, seasons: List<Season>, playFocus: FocusRequester) {
+    val all = remember(seasons) { seasons.flatMap { it.episodes } }
 
-    fun focusSeasons() = scope.launch {
-        scrollIntoView(seasonState, seasonIndex)
-        runCatching { seasonFocus.requestFocus() }
+    // Épisode à proposer : celui en cours, sinon le suivant du dernier vu, sinon le tout premier.
+    val nextIndex = run {
+        val last = all.indexOfLast { (vm.resumeOf(vm.episodeKey(series, it))?.positionMs ?: 0) > 0 }
+        when {
+            last < 0 -> 0
+            vm.resumeOf(vm.episodeKey(series, all[last]))?.finished == true -> (last + 1).coerceAtMost(all.lastIndex)
+            else -> last
+        }
     }
+    val next = all[nextIndex]
+    val nextResume = vm.resumeOf(vm.episodeKey(series, next))
+    val nextSeason = seasons.indexOfFirst { s -> s.episodes.any { it.id == next.id } }.coerceAtLeast(0)
 
-    fun focusEpisodes() = scope.launch {
-        scrollIntoView(episodeState, episodeIndex)
-        runCatching { episodeFocus.requestFocus() }
-    }
+    var seasonIndex by remember(seasons) { mutableIntStateOf(if (vm.seriesEpisode >= 0) vm.seriesSeason.coerceIn(0, seasons.lastIndex) else nextSeason) }
+    val season = seasons[seasonIndex.coerceIn(0, seasons.lastIndex)]
+    val episodeState = remember(seasonIndex) { androidx.compose.foundation.lazy.LazyListState() }
 
     LaunchedEffect(Unit) {
         withFrameNanos { }
-        if (vm.seriesEpisode >= 0) focusEpisodes() else focusSeasons()
+        runCatching { playFocus.requestFocus() }
     }
 
-    Row(Modifier.fillMaxSize()) {
-        LazyColumn(
-            state = seasonState,
-            modifier = Modifier
-                .width(230.dp)
-                .fillMaxHeight()
-                .background(Palette.Panel, RoundedCornerShape(12.dp))
-                .padding(8.dp),
-        ) {
-            itemsIndexed(seasons) { index, s ->
-                TvItem(
-                    onClick = { focusEpisodes() },
-                    onFocus = {
-                        if (vm.seriesSeason != index) {
-                            vm.seriesSeason = index
-                            vm.seriesEpisode = -1
-                        }
-                    },
-                    selected = index == seasonIndex,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(if (index == seasonIndex) Modifier.focusRequester(seasonFocus) else Modifier)
-                        .onPreviewKeyEvent { event ->
-                            if (event.key == Key.DirectionRight) {
-                                if (event.type == KeyEventType.KeyDown) focusEpisodes()
-                                true
-                            } else {
-                                false
-                            }
-                        },
-                ) { focused ->
-                    Text(s.name, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Text(s.episodes.size.toString(), fontSize = 14.sp, color = if (focused) Palette.Text else Palette.TextDim)
-                }
-            }
+    fun play(episode: Episode) {
+        val index = all.indexOfFirst { it.id == episode.id }.coerceAtLeast(0)
+        vm.seriesSeason = seasons.indexOfFirst { s -> s.episodes.any { it.id == episode.id } }.coerceAtLeast(0)
+        vm.seriesEpisode = seasons[vm.seriesSeason].episodes.indexOfFirst { it.id == episode.id }
+        vm.playEpisodes(series, all, index)
+    }
+
+    Column {
+        Row(Modifier.padding(horizontal = 64.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            val resumable = nextResume != null && nextResume.positionMs > 0 && !nextResume.finished
+            TvButton(
+                (if (resumable) "Reprendre" else "Lecture") + "  S${next.season} · É${next.number}",
+                { play(next) },
+                Modifier.focusRequester(playFocus),
+                primary = true,
+                icon = Icons.Rounded.PlayArrow,
+            )
+            val inList = vm.inWatchlist(series)
+            TvButton(if (inList) "Dans ma liste" else "Ma liste", { vm.toggleWatchlist(series) }, icon = if (inList) Icons.Rounded.Check else Icons.Rounded.Add)
         }
 
-        Spacer(Modifier.width(20.dp))
+        Spacer(Modifier.height(22.dp))
 
-        Column(Modifier.weight(1f).fillMaxHeight()) {
-            LazyColumn(state = episodeState, modifier = Modifier.weight(1f)) {
-                itemsIndexed(season.episodes, key = { _, e -> e.id }) { index, episode ->
-                    val resume = vm.resumeOf(vm.episodeKey(series, episode))
-                    TvItem(
-                        onClick = {
-                            vm.seriesEpisode = index
-                            // Tous les épisodes à la suite : la lecture enchaîne sur le suivant, même dans la saison d'après.
-                            val all = seasons.flatMap { it.episodes }
-                            val offset = seasons.take(seasonIndex).sumOf { it.episodes.size }
-                            vm.playEpisodes(series, all, offset + index)
-                        },
-                        onFocus = { vm.seriesEpisode = index },
-                        selected = index == vm.seriesEpisode,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .then(if (index == episodeIndex) Modifier.focusRequester(episodeFocus) else Modifier)
-                            .onPreviewKeyEvent { event ->
-                                if (event.key == Key.DirectionLeft) {
-                                    if (event.type == KeyEventType.KeyDown) focusSeasons()
-                                    true
-                                } else {
-                                    false
-                                }
-                            },
-                    ) { focused ->
+        // Saisons : passer dessus change la liste des épisodes.
+        if (seasons.size > 1) {
+            LazyRow(
+                state = rememberLazyListState(nextSeason),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(horizontal = 64.dp),
+            ) {
+                itemsIndexed(seasons) { index, s ->
+                    SeasonChip(s.name, selected = index == seasonIndex) { seasonIndex = index }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        LazyRow(
+            state = episodeState,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(start = 64.dp, end = 64.dp, top = 12.dp, bottom = 12.dp),
+        ) {
+            itemsIndexed(season.episodes, key = { _, e -> e.id }) { _, episode ->
+                val resume = vm.resumeOf(vm.episodeKey(series, episode))
+                FocusCard(
+                    onClick = { play(episode) },
+                    modifier = Modifier.width(230.dp),
+                    aspectRatio = 16f / 9f,
+                    onFocus = {},
+                    onMenu = null,
+                    below = { focused ->
                         Text(
-                            "É${episode.number}",
-                            fontSize = 15.sp,
+                            episode.title,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
                             color = if (focused) Palette.Text else Palette.TextDim,
-                            modifier = Modifier.width(56.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 12.dp),
                         )
-                        Column(Modifier.weight(1f)) {
-                            Text(episode.title, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (resume != null && resume.positionMs > 0 && !resume.finished) {
-                                Box(Modifier.width(220.dp)) { ProgressLine(resume.fraction) }
-                            }
-                        }
-                        if (resume?.finished == true) Text("✓ vu", fontSize = 14.sp, color = if (focused) Palette.Text else Palette.TextDim)
+                        Text(
+                            when {
+                                resume?.finished == true -> "✓ Vu"
+                                resume != null && resume.positionMs > 0 -> "Reste ${formatDuration(resume.durationMs - resume.positionMs)}"
+                                else -> "Saison ${episode.season}"
+                            },
+                            fontSize = 12.sp,
+                            color = if (resume?.finished == true) Palette.Success else Palette.TextDim,
+                        )
+                    },
+                ) {
+                    Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFF2A2A30), Color(0xFF121214)))))
+                    Text(
+                        "${episode.number}",
+                        fontSize = 56.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color.White.copy(alpha = 0.9f),
+                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 14.dp, bottom = 4.dp),
+                    )
+                    Text(
+                        "ÉPISODE",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Palette.TextDim,
+                        modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
+                    )
+                    if (resume != null && resume.positionMs > 0 && !resume.finished) {
+                        Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 10.dp, vertical = 6.dp)) { ProgressLine(resume.fraction) }
                     }
                 }
             }
-            Text(
-                "OK : lire   ·   la lecture reprend où vous l'aviez laissée   ·   Retour : catalogue",
-                fontSize = 14.sp,
-                color = Palette.TextDim,
-                modifier = Modifier.padding(top = 8.dp),
-            )
         }
     }
+}
+
+@Composable
+private fun SeasonChip(label: String, selected: Boolean, onSelect: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val background by animateColorAsState(
+        when {
+            focused -> Color.White
+            selected -> Palette.Surface
+            else -> Color.Transparent
+        },
+        tween(150),
+        label = "saison",
+    )
+    Text(
+        label,
+        fontSize = 16.sp,
+        fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Medium,
+        color = if (focused) Color.Black else if (selected) Palette.Text else Palette.TextDim,
+        modifier = Modifier
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onSelect()
+            }
+            .clip(RoundedCornerShape(50))
+            .background(background)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onSelect)
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+    )
 }

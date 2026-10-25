@@ -24,12 +24,14 @@ import com.momo.iptv.data.SourceType
 import com.momo.iptv.data.StreamRequest
 import com.momo.iptv.data.VodItem
 import com.momo.iptv.data.VodKind
+import com.momo.iptv.data.normalize
 import com.momo.iptv.update.Updater
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -55,7 +57,7 @@ sealed interface Screen {
     ) : Screen
 }
 
-enum class Section { HOME, LIVE, MOVIES, SERIES, WATCHLIST }
+enum class Section { SEARCH, HOME, LIVE, MOVIES, SERIES, WATCHLIST }
 
 sealed interface UpdateState {
     data object None : UpdateState
@@ -115,8 +117,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---- Films et séries ----
     var section by mutableStateOf(Section.HOME)
 
-    /** Image d'ambiance derrière l'accueil (affiche de l'élément sélectionné). */
-    var ambient by mutableStateOf<String?>(null)
+    // ---- Recherche ----
+    var searchQuery by mutableStateOf("")
+        private set
+    var searchChannels by mutableStateOf<List<Channel>>(emptyList())
+        private set
+    var searchMovies by mutableStateOf<List<VodItem>>(emptyList())
+        private set
+    var searchSeries by mutableStateOf<List<VodItem>>(emptyList())
+        private set
+    var searching by mutableStateOf(false)
+        private set
+    private var searchJob: Job? = null
     var movieDetail by mutableStateOf<VodItem?>(null)
         private set
     var watchlist by mutableStateOf<List<VodItem>>(emptyList())
@@ -296,6 +308,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun resolveStream(channel: Channel): StreamRequest {
         val account = current ?: throw IOException("aucun compte ouvert")
         return repository.resolve(account, channel)
+    }
+
+    // ---- Recherche ----
+
+    fun search(query: String) {
+        searchQuery = query.trim()
+        searchJob?.cancel()
+        searchMovies = emptyList()
+        searchSeries = emptyList()
+        val account = current
+        if (searchQuery.length < 2 || account == null) {
+            searchChannels = emptyList()
+            searching = false
+            return
+        }
+        val q = normalize(searchQuery)
+        searchChannels = library?.playlist?.channels?.filter { normalize(it.name).contains(q) }?.take(60).orEmpty()
+        if (account.type == SourceType.M3U) return
+        searching = true
+        searchJob = viewModelScope.launch {
+            try {
+                val movies = async { runCatching { repository.searchVod(account, VodKind.MOVIE, searchQuery) }.getOrDefault(emptyList()) }
+                val series = async { runCatching { repository.searchVod(account, VodKind.SERIES, searchQuery) }.getOrDefault(emptyList()) }
+                searchMovies = movies.await()
+                searchSeries = series.await()
+            } finally {
+                searching = false
+            }
+        }
     }
 
     // ---- Guide TV ----

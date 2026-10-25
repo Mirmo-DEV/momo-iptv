@@ -66,6 +66,21 @@ class PlaylistRepository(context: Context) {
         list
     }
 
+    /** Recherche de films ou séries. Xtream : catalogue complet gardé 12 h, filtré sur l'appareil. */
+    suspend fun searchVod(account: Account, kind: VodKind, query: String): List<VodItem> = withContext(Dispatchers.IO) {
+        when (account.type) {
+            SourceType.XTREAM -> {
+                val name = "${account.id}_${kind}_all"
+                val cached = vodCache.readItems(name)?.takeIf { System.currentTimeMillis() - it.updatedAt < 12 * 3600_000L }?.items
+                val all = cached ?: XtreamSource.vodItems(account, kind, null).also { vodCache.writeItems(name, it) }
+                val q = normalize(query)
+                all.filter { normalize(it.name).contains(q) }.take(80)
+            }
+            SourceType.STALKER -> stalker(account).search(kind, query).take(80)
+            SourceType.M3U -> emptyList()
+        }
+    }
+
     suspend fun movieDetails(account: Account, movie: VodItem): VodItem = withContext(Dispatchers.IO) {
         when (account.type) {
             SourceType.XTREAM -> XtreamSource.movieDetails(account, movie)

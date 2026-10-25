@@ -15,6 +15,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
@@ -52,7 +53,7 @@ fun AccountsScreen(vm: AppViewModel) {
                 ) { focused ->
                     Column(Modifier.weight(1f)) {
                         Text(account.name, fontSize = 20.sp)
-                        Text(describe(account), fontSize = 14.sp, color = if (focused) Palette.Text else Palette.TextDim)
+                        Text(describe(account), fontSize = 14.sp, color = if (focused) Color.Black.copy(alpha = 0.65f) else Palette.TextDim)
                     }
                 }
             }

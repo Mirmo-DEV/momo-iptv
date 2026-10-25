@@ -89,17 +89,19 @@ object XtreamSource {
         return out
     }
 
-    fun vodItems(account: Account, kind: VodKind, categoryId: String): List<VodItem> {
+    /** [categoryId] null = tout le catalogue (pour la recherche). */
+    fun vodItems(account: Account, kind: VodKind, categoryId: String?): List<VodItem> {
         val server = Server(account)
         val out = ArrayList<VodItem>()
+        val filter = if (categoryId != null) arrayOf("category_id" to categoryId) else emptyArray()
         if (kind == VodKind.MOVIE) {
-            readArray(server.url("get_vod_streams", "category_id" to categoryId)) { o ->
+            readArray(server.url("get_vod_streams", *filter)) { o ->
                 val id = o["stream_id"] ?: return@readArray
                 out += VodItem(
                     id = id,
                     name = o["name"]?.trim().orEmpty().ifEmpty { "Film $id" },
                     kind = VodKind.MOVIE,
-                    categoryId = categoryId,
+                    categoryId = categoryId ?: o["category_id"].orEmpty(),
                     poster = o["stream_icon"]?.takeIf { it.isNotBlank() },
                     url = server.stream("movie", id, o["container_extension"]?.ifBlank { null } ?: "mp4"),
                     rating = o["rating"]?.takeIf { it.isNotBlank() && it != "0" },
@@ -107,13 +109,13 @@ object XtreamSource {
                 )
             }
         } else {
-            readArray(server.url("get_series", "category_id" to categoryId)) { o ->
+            readArray(server.url("get_series", *filter)) { o ->
                 val id = o["series_id"] ?: return@readArray
                 out += VodItem(
                     id = id,
                     name = o["name"]?.trim().orEmpty().ifEmpty { "Série $id" },
                     kind = VodKind.SERIES,
-                    categoryId = categoryId,
+                    categoryId = categoryId ?: o["category_id"].orEmpty(),
                     poster = o["cover"]?.takeIf { it.isNotBlank() },
                     rating = o["rating"]?.takeIf { it.isNotBlank() && it != "0" },
                     year = (o["releaseDate"] ?: o["release_date"])?.take(4)?.takeIf { it.isNotBlank() },

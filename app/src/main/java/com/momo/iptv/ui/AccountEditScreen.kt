@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -178,7 +179,7 @@ private fun FieldRow(
     var editing by remember { mutableStateOf(false) }
     TvItem(onClick = { editing = true }, modifier = Modifier.fillMaxWidth()) { focused ->
         Column(Modifier.weight(1f)) {
-            Text(label, fontSize = 14.sp, color = if (focused) Palette.Text else Palette.TextDim)
+            Text(label, fontSize = 14.sp, color = if (focused) Color.Black.copy(alpha = 0.65f) else Palette.TextDim)
             Text(
                 when {
                     value.isEmpty() -> "Appuyez sur OK pour saisir"
@@ -186,7 +187,7 @@ private fun FieldRow(
                     else -> value
                 },
                 fontSize = 19.sp,
-                color = if (value.isEmpty() && !focused) Palette.TextDim else Palette.Text,
+                color = if (value.isEmpty() && !focused) Palette.TextDim else if (focused) Color.Black else Palette.Text,
             )
         }
         Text("✎", fontSize = 18.sp)

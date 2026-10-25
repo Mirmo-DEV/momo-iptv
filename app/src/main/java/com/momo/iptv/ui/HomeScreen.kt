@@ -4,17 +4,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,31 +22,52 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccountCircle
+import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.LiveTv
+import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Tv
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,64 +77,167 @@ import com.momo.iptv.CAT_ALL
 import com.momo.iptv.CAT_FAVORITES
 import com.momo.iptv.Library
 import com.momo.iptv.Section
+import com.momo.iptv.data.Channel
 import com.momo.iptv.data.SourceType
 import com.momo.iptv.data.VodKind
-import com.momo.iptv.data.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private val RAIL_COLLAPSED = 84.dp
+private val RAIL_EXPANDED = 240.dp
+
+private class NavEntry(val section: Section, val label: String, val icon: ImageVector)
+
+/**
+ * Écran principal façon Netflix : menu d'icônes à gauche (il s'ouvre quand on y va),
+ * contenu de la rubrique à droite.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun HomeScreen(vm: AppViewModel) {
     val account = vm.current ?: return
-    BackHandler { vm.goToAccounts() }
-    val sections = if (account.type == SourceType.M3U) {
-        listOf(Section.HOME to "Accueil", Section.LIVE to "Direct")
-    } else {
-        listOf(Section.HOME to "Accueil", Section.LIVE to "Direct", Section.MOVIES to "Films", Section.SERIES to "Séries", Section.WATCHLIST to "Ma liste")
+    val entries = buildList {
+        add(NavEntry(Section.SEARCH, "Rechercher", Icons.Rounded.Search))
+        add(NavEntry(Section.HOME, "Accueil", Icons.Rounded.Home))
+        add(NavEntry(Section.LIVE, "Direct", Icons.Rounded.LiveTv))
+        if (account.type != SourceType.M3U) {
+            add(NavEntry(Section.MOVIES, "Films", Icons.Rounded.Movie))
+            add(NavEntry(Section.SERIES, "Séries", Icons.Rounded.Tv))
+            add(NavEntry(Section.WATCHLIST, "Ma liste", Icons.Rounded.Bookmark))
+        }
     }
-    if (vm.section !in sections.map { it.first }) vm.section = Section.HOME
-    // L'image d'ambiance ne concerne que les rubriques films/séries.
-    if (vm.section == Section.LIVE) vm.ambient = null
+    if (entries.none { it.section == vm.section }) vm.section = Section.HOME
+
+    var railFocused by remember { mutableStateOf(false) }
+    val selectedFocus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val scope = rememberCoroutineScope()
+    val railWidth by animateDpAsState(if (railFocused) RAIL_EXPANDED else RAIL_COLLAPSED, tween(200), label = "menu")
+
+    // Retour : depuis le contenu on revient au menu, depuis le menu on va aux comptes.
+    BackHandler {
+        if (railFocused) vm.goToAccounts() else runCatching { selectedFocus.requestFocus() }
+    }
 
     Box(Modifier.fillMaxSize()) {
-        AmbientBackdrop(vm.ambient)
-        Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 24.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "MOMO",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Palette.Accent,
-                    letterSpacing = 3.sp,
-                )
-                Spacer(Modifier.width(28.dp))
-                sections.forEach { (section, label) ->
-                    NavTab(label, vm.section == section) { vm.section = section }
-                }
-                Spacer(Modifier.weight(1f))
-                AnimatedVisibility(vm.refreshing, enter = fadeIn(), exit = fadeOut()) {
-                    Text("Mise à jour…", fontSize = 13.sp, color = Palette.TextDim, modifier = Modifier.padding(end = 14.dp))
-                }
-                if (vm.section == Section.LIVE) {
-                    TvButton("⟳  Actualiser", vm::refresh)
-                    Spacer(Modifier.width(10.dp))
-                }
-                TvButton(account.name, vm::goToAccounts)
-            }
-            Spacer(Modifier.height(18.dp))
-
-            Crossfade(targetState = vm.section, animationSpec = tween(260), label = "rubrique") { section ->
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(start = RAIL_COLLAPSED)
+                .focusRestorer(),
+        ) {
+            Crossfade(targetState = vm.section, animationSpec = tween(220), label = "rubrique") { section ->
                 when (section) {
-                    Section.HOME -> HomeFeed(vm)
-                    Section.MOVIES -> VodBrowser(vm, VodKind.MOVIE)
-                    Section.SERIES -> VodBrowser(vm, VodKind.SERIES)
-                    Section.WATCHLIST -> WatchlistGrid(vm)
+                    Section.SEARCH -> SearchScreen(vm)
+                    Section.HOME -> BrowseHome(vm)
                     Section.LIVE -> LiveSection(vm)
+                    Section.MOVIES -> BrowseCatalog(vm, VodKind.MOVIE)
+                    Section.SERIES -> BrowseCatalog(vm, VodKind.SERIES)
+                    Section.WATCHLIST -> WatchlistGrid(vm)
                 }
             }
+        }
+
+        // Voile sombre quand le menu est ouvert.
+        AnimatedVisibility(railFocused, enter = fadeIn(tween(200)), exit = fadeOut(tween(200))) {
+            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color.Black, Color.Black.copy(alpha = 0.85f), Color.Transparent))))
+        }
+
+        Column(
+            Modifier
+                .width(railWidth)
+                .fillMaxHeight()
+                .background(Brush.horizontalGradient(listOf(Color.Black.copy(alpha = 0.9f), Color.Transparent)))
+                .onFocusChanged { railFocused = it.hasFocus }
+                .focusProperties { enter = { selectedFocus } }
+                .focusGroup()
+                .padding(horizontal = 14.dp, vertical = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                if (railFocused) "MOMO" else "M",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Palette.Accent,
+                modifier = Modifier.padding(start = 14.dp, bottom = 28.dp),
+            )
+            entries.forEach { entry ->
+                RailItem(
+                    label = entry.label,
+                    icon = entry.icon,
+                    selected = vm.section == entry.section,
+                    expanded = railFocused,
+                    modifier = if (vm.section == entry.section) Modifier.focusRequester(selectedFocus) else Modifier,
+                    onClick = {
+                        vm.section = entry.section
+                        scope.launch {
+                            delay(250)
+                            focusManager.moveFocus(FocusDirection.Right)
+                        }
+                    },
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            RailItem(
+                label = account.name,
+                icon = Icons.Rounded.AccountCircle,
+                selected = false,
+                expanded = railFocused,
+                onClick = vm::goToAccounts,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RailItem(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    expanded: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val background by animateColorAsState(if (focused) Color.White else Color.Transparent, tween(150), label = "menu")
+    val tint = when {
+        focused -> Color.Black
+        selected -> Color.White
+        else -> Palette.TextDim
+    }
+    Row(
+        modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
+            .clip(RoundedCornerShape(10.dp))
+            .background(background)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(26.dp))
+            Box(
+                Modifier
+                    .padding(top = 3.dp)
+                    .size(18.dp, 3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(if (selected && !focused) Palette.Accent else Color.Transparent),
+            )
+        }
+        if (expanded) {
+            Spacer(Modifier.width(16.dp))
+            Text(
+                label,
+                fontSize = 18.sp,
+                fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Medium,
+                color = tint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -124,50 +245,28 @@ fun HomeScreen(vm: AppViewModel) {
 @Composable
 private fun LiveSection(vm: AppViewModel) {
     val library = vm.library
-    when {
-        library != null -> Lists(vm, library)
-        vm.loading -> Loading("Chargement de la liste… (seulement la première fois)")
-        else -> LoadFailed(vm)
-    }
-}
-
-/** Onglet de navigation : il suffit de passer dessus pour changer de rubrique. */
-@Composable
-private fun NavTab(label: String, selected: Boolean, onSelect: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    val background by animateColorAsState(if (focused) Color.White else Color.Transparent, tween(160), label = "onglet")
-    val textColor by animateColorAsState(
-        when {
-            focused -> Palette.Bg
-            selected -> Palette.Text
-            else -> Palette.TextDim
-        },
-        tween(160),
-        label = "texte",
-    )
-    val underline by animateFloatAsState(if (selected && !focused) 1f else 0f, tween(220), label = "soulignement")
-    Column(
-        Modifier
-            .padding(end = 6.dp)
-            .onFocusChanged {
-                focused = it.isFocused
-                if (it.isFocused) onSelect()
+    Column(Modifier.fillMaxSize().padding(start = 24.dp, end = 48.dp, top = 28.dp, bottom = 20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Direct", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold)
+                Text(
+                    when {
+                        vm.refreshing -> "Mise à jour de la liste…"
+                        library != null -> "${library.playlist.channels.size} chaînes · liste du ${formatDate(library.playlist.updatedAt)}"
+                        else -> ""
+                    },
+                    fontSize = 14.sp,
+                    color = Palette.TextDim,
+                )
             }
-            .clip(RoundedCornerShape(50))
-            .background(background)
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onSelect)
-            .padding(horizontal = 16.dp, vertical = 7.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(label, fontSize = 17.sp, fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Medium, color = textColor)
-        Box(
-            Modifier
-                .padding(top = 3.dp)
-                .height(3.dp)
-                .width(22.dp * underline)
-                .clip(RoundedCornerShape(2.dp))
-                .background(Palette.Accent),
-        )
+            TvButton("Actualiser", vm::refresh, icon = Icons.Rounded.Refresh)
+        }
+        Spacer(Modifier.height(18.dp))
+        when {
+            library != null -> Lists(vm, library)
+            vm.loading -> Loading("Chargement de la liste… (seulement la première fois)")
+            else -> LoadFailed(vm)
+        }
     }
 }
 
@@ -231,7 +330,6 @@ private fun Lists(vm: AppViewModel, library: Library) {
 
     LaunchedEffect(Unit) {
         withFrameNanos { }
-        // Pas de saut de focus quand on change simplement d'onglet.
         if (!vm.consumeHomeFocus()) return@LaunchedEffect
         if (vm.lastChannelId != null && channels.any { it.id == vm.lastChannelId }) focusChannels() else focusCategories()
     }
@@ -240,7 +338,7 @@ private fun Lists(vm: AppViewModel, library: Library) {
         LazyColumn(
             state = categoryState,
             modifier = Modifier
-                .width(330.dp)
+                .width(300.dp)
                 .fillMaxHeight()
                 .background(Palette.Panel, RoundedCornerShape(12.dp))
                 .padding(8.dp),
@@ -262,8 +360,8 @@ private fun Lists(vm: AppViewModel, library: Library) {
                             }
                         },
                 ) { focused ->
-                    Text(entry.label, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Text(entry.count.toString(), fontSize = 14.sp, color = if (focused) Palette.Text else Palette.TextDim)
+                    Text(entry.label, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(entry.count.toString(), fontSize = 14.sp, color = if (focused) Color.Black.copy(alpha = 0.6f) else Palette.TextDim)
                 }
             }
         }
@@ -273,7 +371,7 @@ private fun Lists(vm: AppViewModel, library: Library) {
         Column(Modifier.weight(1f).fillMaxHeight()) {
             if (channels.isEmpty()) {
                 Text(
-                    if (selected == CAT_FAVORITES) "Aucun favori pour l'instant.\nSur une chaîne, appuyez sur la touche Menu ≡ pour l'ajouter."
+                    if (selected == CAT_FAVORITES) "Aucun favori pour l'instant.\nSur une chaîne, appuie sur la touche Menu ≡ pour l'ajouter."
                     else "Aucune chaîne dans cette catégorie.",
                     color = Palette.TextDim,
                     fontSize = 18.sp,
@@ -305,7 +403,7 @@ private fun Lists(vm: AppViewModel, library: Library) {
             }
             channels.getOrNull(channelIndex)?.let { EpgStrip(vm, it) }
             Text(
-                "OK : regarder   ·   Menu ≡ : ajouter/retirer des favoris   ·   Retour : comptes",
+                "OK : regarder   ·   Menu ≡ : favori",
                 fontSize = 14.sp,
                 color = Palette.TextDim,
                 modifier = Modifier.padding(top = 8.dp),
@@ -334,7 +432,7 @@ private fun EpgStrip(vm: AppViewModel, channel: Channel) {
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         current?.let { p ->
-            Text("En ce moment · ${timeRange(p)}  ${p.title}", fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("En ce moment · ${timeRange(p)}  ${p.title}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             ProgressLine(((now - p.start).toFloat() / (p.end - p.start).coerceAtLeast(1)).coerceIn(0f, 1f))
         }
         next?.let { p ->

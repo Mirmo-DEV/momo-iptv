@@ -130,7 +130,7 @@ class StalkerClient(val account: Account) {
      * Liste paginée (≈ 14 éléments par page) : on lit la première page,
      * puis les suivantes en parallèle.
      */
-    private fun fetchPages(type: String, vararg params: Pair<String, String>): List<JsonObject> {
+    private fun fetchPages(type: String, vararg params: Pair<String, String>, maxPages: Int = MAX_PAGES): List<JsonObject> {
         fun page(p: Int): JsonObject? =
             getJs(api(type, "get_ordered_list", *params, "p" to p.toString())) as? JsonObject
 
@@ -139,7 +139,7 @@ class StalkerClient(val account: Account) {
         if (firstData.isEmpty()) return emptyList()
         val total = first.text("total_items")?.toIntOrNull() ?: firstData.size
         val perPage = first.text("max_page_items")?.toIntOrNull()?.takeIf { it > 0 } ?: firstData.size
-        val pages = ((total + perPage - 1) / perPage).coerceIn(1, MAX_PAGES)
+        val pages = ((total + perPage - 1) / perPage).coerceIn(1, maxPages)
 
         val all = ArrayList<JsonArray>(pages)
         all += firstData
@@ -175,11 +175,25 @@ class StalkerClient(val account: Account) {
         if (token == null) handshake()
         val section = sectionOf(kind)
         return fetchPages(section, "category" to categoryId, "genre" to categoryId, "sortby" to "added", "fav" to "0", "hd" to "0")
-            .mapNotNull { o ->
-                val id = o.text("id") ?: return@mapNotNull null
+            .mapNotNull { o -> toVodItem(o, kind, categoryId, section) }
+    }
+
+    /** Recherche côté portail (quelques pages de résultats suffisent). */
+    @Synchronized
+    fun search(kind: VodKind, query: String): List<VodItem> {
+        if (token == null) handshake()
+        val section = sectionOf(kind)
+        return runCatching {
+            fetchPages(section, "category" to "*", "genre" to "*", "search" to query, "sortby" to "added", "fav" to "0", "hd" to "0", maxPages = 4)
+        }.getOrDefault(emptyList()).mapNotNull { o -> toVodItem(o, kind, o.text("category_id").orEmpty(), section) }
+    }
+
+    private fun toVodItem(o: JsonObject, kind: VodKind, categoryId: String, section: String): VodItem? {
+        run {
+                val id = o.text("id") ?: return null
                 val episodes = (o["series"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content?.toIntOrNull() }
                 val isSeries = kind == VodKind.SERIES || episodes.isNotEmpty() || o.text("is_series") == "1"
-                VodItem(
+                val item = VodItem(
                     id = id,
                     name = o.text("name")?.trim()?.ifEmpty { null } ?: "Titre $id",
                     kind = if (isSeries) VodKind.SERIES else VodKind.MOVIE,
@@ -198,6 +212,7 @@ class StalkerClient(val account: Account) {
                     cast = o.text("actors")?.takeIf { it.isNotBlank() },
                     duration = o.text("time")?.toLongOrNull()?.takeIf { it > 0 }?.let { readableDuration(it) },
                 )
+                return item
             }
     }
 

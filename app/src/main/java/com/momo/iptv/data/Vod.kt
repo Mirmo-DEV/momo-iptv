@@ -70,6 +70,13 @@ data class Programme(val title: String, val start: Long, val end: Long, val desc
 @Serializable
 data class CachedList<T>(val updatedAt: Long, val items: List<T>)
 
+/** Pour la recherche : minuscules, sans accents. */
+fun normalize(text: String): String =
+    java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
+        .replace(Regex("\\p{Mn}+"), "")
+        .lowercase()
+        .trim()
+
 /** 112 → « 1 h 52 ». */
 fun readableDuration(minutes: Long): String =
     if (minutes >= 60) "${minutes / 60} h ${"%02d".format(minutes % 60)}" else "$minutes min"
