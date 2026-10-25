@@ -47,6 +47,54 @@ class FavoritesStore(context: Context) {
     }
 }
 
+/** Position de reprise des films et épisodes, par compte. */
+class ResumeStore(context: Context) {
+    private val prefs = context.getSharedPreferences("resume", Context.MODE_PRIVATE)
+
+    data class Position(val positionMs: Long, val durationMs: Long) {
+        val fraction: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+        val finished: Boolean get() = durationMs > 0 && positionMs >= durationMs * 95 / 100
+    }
+
+    fun get(accountId: String, key: String): Position? {
+        val raw = prefs.getString("$accountId|$key", null) ?: return null
+        val parts = raw.split(',')
+        val pos = parts.getOrNull(0)?.toLongOrNull() ?: return null
+        return Position(pos, parts.getOrNull(1)?.toLongOrNull() ?: 0L)
+    }
+
+    fun set(accountId: String, key: String, positionMs: Long, durationMs: Long) {
+        prefs.edit().putString("$accountId|$key", "$positionMs,$durationMs").apply()
+    }
+}
+
+/** Copie locale des catalogues films/séries, par catégorie. */
+class VodCache(context: Context) {
+    private val dir = File(context.filesDir, "vod").apply { mkdirs() }
+
+    private fun file(name: String) = File(dir, name.replace(Regex("[^A-Za-z0-9_.-]"), "_") + ".json")
+
+    fun readItems(name: String): CachedList<VodItem>? = runCatching {
+        json.decodeFromString(CachedList.serializer(VodItem.serializer()), file(name).readText())
+    }.getOrNull()
+
+    fun writeItems(name: String, items: List<VodItem>) = runCatching {
+        file(name).writeText(json.encodeToString(CachedList.serializer(VodItem.serializer()), CachedList(System.currentTimeMillis(), items)))
+    }
+
+    fun readCategories(name: String): CachedList<Category>? = runCatching {
+        json.decodeFromString(CachedList.serializer(Category.serializer()), file(name).readText())
+    }.getOrNull()
+
+    fun writeCategories(name: String, items: List<Category>) = runCatching {
+        file(name).writeText(json.encodeToString(CachedList.serializer(Category.serializer()), CachedList(System.currentTimeMillis(), items)))
+    }
+
+    fun deleteAccount(accountId: String) {
+        dir.listFiles()?.filter { it.name.startsWith(accountId) }?.forEach { it.delete() }
+    }
+}
+
 /** Copie locale des listes de chaînes : affichage instantané au démarrage. */
 @OptIn(ExperimentalSerializationApi::class)
 class PlaylistCache(context: Context) {

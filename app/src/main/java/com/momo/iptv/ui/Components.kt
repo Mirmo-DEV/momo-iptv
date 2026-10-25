@@ -33,7 +33,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import com.momo.iptv.data.Channel
+import com.momo.iptv.data.Programme
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 object Palette {
     val Bg = Color(0xFF0B0F17)
@@ -104,6 +111,34 @@ fun TvButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     ) {
         Text(text, fontSize = 17.sp, color = Palette.Text)
     }
+}
+
+/** Barre de progression fine (programme en cours, position de reprise…). */
+@Composable
+fun ProgressLine(fraction: Float, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .height(4.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(Palette.Selected),
+    ) {
+        Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).fillMaxHeight().background(Palette.Accent))
+    }
+}
+
+fun timeRange(p: Programme): String = "${clock(p.start)}–${clock(p.end)}"
+
+private fun clock(millis: Long): String = SimpleDateFormat("HH:mm", Locale.FRANCE).format(Date(millis))
+
+/** 1:05:09 ou 5:09. */
+fun formatDuration(millis: Long): String {
+    val total = (millis / 1000).coerceAtLeast(0)
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
 @Composable

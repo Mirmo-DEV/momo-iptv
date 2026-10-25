@@ -1,9 +1,13 @@
 package com.momo.iptv.data
 
 import android.net.Uri
+import android.util.Base64
 import android.util.JsonReader
 import android.util.JsonToken
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.HttpUrl
@@ -30,40 +34,150 @@ object XtreamSource {
         )
     }
 
-    fun fetch(account: Account): Playlist {
+    /** Adresses de l'API et des flux pour un compte. */
+    private class Server(account: Account) {
         val base = parseServer(account.server).base
-        val api = "$base/player_api.php".toHttpUrlOrNull()
-            ?: throw IOException("adresse du serveur invalide")
+        private val api = "$base/player_api.php".toHttpUrlOrNull() ?: throw IOException("adresse du serveur invalide")
+        private val username = account.username.trim()
+        private val password = account.password.trim()
+        val user: String = Uri.encode(username)
+        val pass: String = Uri.encode(password)
 
-        fun apiUrl(action: String?): HttpUrl = api.newBuilder()
-            .addQueryParameter("username", account.username.trim())
-            .addQueryParameter("password", account.password.trim())
-            .apply { if (action != null) addQueryParameter("action", action) }
+        fun url(action: String?, vararg params: Pair<String, String>): HttpUrl = api.newBuilder()
+            .addQueryParameter("username", username)
+            .addQueryParameter("password", password)
+            .apply {
+                if (action != null) addQueryParameter("action", action)
+                params.forEach { (k, v) -> addQueryParameter(k, v) }
+            }
             .build()
 
-        checkAuth(apiUrl(null))
+        fun stream(kind: String, id: String, ext: String) = "$base/$kind/$user/$pass/$id.$ext"
+    }
+
+    fun fetch(account: Account): Playlist {
+        val server = Server(account)
+        checkAuth(server.url(null))
 
         val builder = PlaylistBuilder()
-        readArray(apiUrl("get_live_categories")) { o ->
+        readArray(server.url("get_live_categories")) { o ->
             val id = o["category_id"] ?: return@readArray
             builder.category(id, o["category_name"]?.takeIf { it.isNotBlank() } ?: "Catégorie $id")
         }
-
-        val user = Uri.encode(account.username.trim())
-        val pass = Uri.encode(account.password.trim())
         val ext = if (account.useHls) "m3u8" else "ts"
-        readArray(apiUrl("get_live_streams")) { o ->
+        readArray(server.url("get_live_streams")) { o ->
             val streamId = o["stream_id"] ?: return@readArray
             builder.channel(
                 baseId = streamId,
                 name = o["name"]?.trim().orEmpty().ifEmpty { "Chaîne $streamId" },
                 categoryId = o["category_id"] ?: "0",
-                url = "$base/live/$user/$pass/$streamId.$ext",
+                url = server.stream("live", streamId, ext),
                 logo = o["stream_icon"],
                 epgId = o["epg_channel_id"],
             )
         }
         return builder.build()
+    }
+
+    fun vodCategories(account: Account, kind: VodKind): List<Category> {
+        val server = Server(account)
+        val out = ArrayList<Category>()
+        readArray(server.url(if (kind == VodKind.MOVIE) "get_vod_categories" else "get_series_categories")) { o ->
+            val id = o["category_id"] ?: return@readArray
+            out += Category(id, o["category_name"]?.takeIf { it.isNotBlank() } ?: "Catégorie $id")
+        }
+        return out
+    }
+
+    fun vodItems(account: Account, kind: VodKind, categoryId: String): List<VodItem> {
+        val server = Server(account)
+        val out = ArrayList<VodItem>()
+        if (kind == VodKind.MOVIE) {
+            readArray(server.url("get_vod_streams", "category_id" to categoryId)) { o ->
+                val id = o["stream_id"] ?: return@readArray
+                out += VodItem(
+                    id = id,
+                    name = o["name"]?.trim().orEmpty().ifEmpty { "Film $id" },
+                    kind = VodKind.MOVIE,
+                    categoryId = categoryId,
+                    poster = o["stream_icon"]?.takeIf { it.isNotBlank() },
+                    url = server.stream("movie", id, o["container_extension"]?.ifBlank { null } ?: "mp4"),
+                    rating = o["rating"]?.takeIf { it.isNotBlank() && it != "0" },
+                    year = o["year"]?.takeIf { it.isNotBlank() },
+                )
+            }
+        } else {
+            readArray(server.url("get_series", "category_id" to categoryId)) { o ->
+                val id = o["series_id"] ?: return@readArray
+                out += VodItem(
+                    id = id,
+                    name = o["name"]?.trim().orEmpty().ifEmpty { "Série $id" },
+                    kind = VodKind.SERIES,
+                    categoryId = categoryId,
+                    poster = o["cover"]?.takeIf { it.isNotBlank() },
+                    rating = o["rating"]?.takeIf { it.isNotBlank() && it != "0" },
+                    year = (o["releaseDate"] ?: o["release_date"])?.take(4)?.takeIf { it.isNotBlank() },
+                )
+            }
+        }
+        return out
+    }
+
+    fun seasons(account: Account, series: VodItem): List<Season> {
+        val server = Server(account)
+        val root = getJson(server.url("get_series_info", "series_id" to series.id)) as? JsonObject
+            ?: throw IOException("fiche de la série illisible")
+        val names = HashMap<Int, String>()
+        (root["seasons"] as? JsonArray)?.forEach { s ->
+            val o = s as? JsonObject ?: return@forEach
+            val n = o.text("season_number")?.toIntOrNull() ?: return@forEach
+            o.text("name")?.takeIf { it.isNotBlank() }?.let { names[n] = it }
+        }
+        // « episodes » : { "1": [ … ], "2": [ … ] } ou [ [ … ], [ … ] ]
+        val groups: List<JsonElement> = when (val e = root["episodes"]) {
+            is JsonObject -> e.values.toList()
+            is JsonArray -> e.toList()
+            else -> emptyList()
+        }
+        val episodes = groups.flatMap { g -> (g as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList() }
+            .mapNotNull { o ->
+                val id = o.text("id") ?: return@mapNotNull null
+                val season = o.text("season")?.toIntOrNull() ?: 1
+                val number = o.text("episode_num")?.toIntOrNull() ?: 0
+                Episode(
+                    id = id,
+                    season = season,
+                    number = number,
+                    title = o.text("title")?.takeIf { it.isNotBlank() } ?: "Épisode $number",
+                    url = server.stream("series", id, o.text("container_extension")?.ifBlank { null } ?: "mp4"),
+                )
+            }
+        return episodes.groupBy { it.season }.toSortedMap().map { (n, list) ->
+            Season(n, names[n] ?: "Saison $n", list.sortedBy { it.number })
+        }
+    }
+
+    fun shortEpg(account: Account, channel: Channel): List<Programme> {
+        val server = Server(account)
+        val streamId = channel.id.substringBefore('#')
+        val root = getJson(server.url("get_short_epg", "stream_id" to streamId, "limit" to "4")) as? JsonObject ?: return emptyList()
+        return (root["epg_listings"] as? JsonArray).orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            val start = o.text("start_timestamp")?.toLongOrNull() ?: return@mapNotNull null
+            val end = o.text("stop_timestamp")?.toLongOrNull() ?: return@mapNotNull null
+            Programme(
+                title = decode(o.text("title")).ifBlank { "Programme" },
+                start = start * 1000,
+                end = end * 1000,
+                description = decode(o.text("description")).ifBlank { null },
+            )
+        }
+    }
+
+    /** Les titres du guide Xtream sont encodés en base64. */
+    private fun decode(value: String?): String {
+        if (value.isNullOrBlank()) return ""
+        return runCatching { String(Base64.decode(value, Base64.DEFAULT), Charsets.UTF_8) }.getOrDefault(value).trim()
     }
 
     private fun checkAuth(url: HttpUrl) {
@@ -86,9 +200,16 @@ object XtreamSource {
         }
     }
 
+    private fun getJson(url: HttpUrl): JsonElement? {
+        Http.client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("le serveur a répondu HTTP ${resp.code}")
+            return runCatching { Json.parseToJsonElement(resp.body?.string().orEmpty()) }.getOrNull()
+        }
+    }
+
     /**
      * Lecture en flux d'un tableau JSON d'objets : peu de mémoire même avec
-     * des dizaines de milliers de chaînes.
+     * des dizaines de milliers d'éléments.
      */
     private fun readArray(url: HttpUrl, onItem: (Map<String, String?>) -> Unit) {
         Http.client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
@@ -103,4 +224,7 @@ object XtreamSource {
             }
         }
     }
+
+    private fun JsonObject.text(key: String): String? =
+        (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
 }

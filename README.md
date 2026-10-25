@@ -47,5 +47,5 @@ La clé de signature est stockée dans les secrets du dépôt (`SIGNING_KEYSTORE
 
 ## Feuille de route
 
-- **V2** : guide TV (EPG), films et séries avec reprise de lecture
+- **V2** : guide TV (en cours / ensuite), films et séries avec reprise de lecture — disponible (sauf guide TV pour les listes M3U)
 - **V3** : replay (le portail Stalker est déjà disponible)

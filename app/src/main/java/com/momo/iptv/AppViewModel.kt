@@ -13,8 +13,18 @@ import com.momo.iptv.data.Channel
 import com.momo.iptv.data.FavoritesStore
 import com.momo.iptv.data.Playlist
 import com.momo.iptv.data.PlaylistRepository
+import com.momo.iptv.data.Episode
+import com.momo.iptv.data.Playable
+import com.momo.iptv.data.Programme
+import com.momo.iptv.data.ResumeStore
+import com.momo.iptv.data.Season
+import com.momo.iptv.data.SourceType
 import com.momo.iptv.data.StreamRequest
+import com.momo.iptv.data.VodItem
+import com.momo.iptv.data.VodKind
 import com.momo.iptv.update.Updater
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,7 +41,11 @@ sealed interface Screen {
     data class EditAccount(val account: Account?) : Screen
     data object Home : Screen
     data class Player(val channels: List<Channel>, val startIndex: Int) : Screen
+    data class Series(val series: VodItem) : Screen
+    data class VodPlayer(val items: List<Playable>, val startIndex: Int, val back: Screen) : Screen
 }
+
+enum class Section { LIVE, MOVIES, SERIES }
 
 sealed interface UpdateState {
     data object None : UpdateState
@@ -53,11 +67,14 @@ const val CAT_ALL = "__toutes__"
 
 /** Au-delà de cet âge, la liste en cache est rafraîchie en arrière-plan à l'ouverture du compte. */
 private const val AUTO_REFRESH_AFTER_MS = 3 * 60 * 60 * 1000L
+private const val VOD_REFRESH_AFTER_MS = 12 * 60 * 60 * 1000L
+private const val EPG_REFRESH_AFTER_MS = 15 * 60 * 1000L
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val accountStore = AccountStore(app)
     private val favoritesStore = FavoritesStore(app)
     private val repository = PlaylistRepository(app)
+    private val resumeStore = ResumeStore(app)
     private var loadJob: Job? = null
 
     var accounts by mutableStateOf(accountStore.load())
@@ -83,6 +100,39 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Dernière chaîne regardée : le focus y revient en sortant du lecteur. */
     var lastChannelId by mutableStateOf<String?>(null)
         private set
+
+    // ---- Films et séries ----
+    var section by mutableStateOf(Section.LIVE)
+    val vodCategories = mutableStateMapOf<VodKind, List<Category>>()
+    val vodSelected = mutableStateMapOf<VodKind, String>()
+    val vodItems = mutableStateMapOf<String, List<VodItem>>()
+    val vodLoading = mutableStateMapOf<String, Boolean>()
+    val vodErrors = mutableStateMapOf<String, String>()
+    var seasons by mutableStateOf<List<Season>?>(null)
+        private set
+    var seasonsError by mutableStateOf<String?>(null)
+        private set
+    private var seasonsOf: String? = null
+    var seriesSeason by mutableIntStateOf(0)
+    var seriesEpisode by mutableIntStateOf(-1)
+
+    /** Dernière affiche sélectionnée par catégorie : le focus y revient au retour du lecteur. */
+    val vodGridIndex = HashMap<String, Int>()
+    var resumeVersion by mutableIntStateOf(0)
+        private set
+
+    /** L'accueil place le focus tout seul seulement en y arrivant (pas en changeant d'onglet). */
+    private var pendingHomeFocus = true
+
+    fun consumeHomeFocus(): Boolean {
+        val pending = pendingHomeFocus
+        pendingHomeFocus = false
+        return pending
+    }
+
+    // ---- Guide TV ----
+    val epg = mutableStateMapOf<String, List<Programme>>()
+    private val epgFetched = HashMap<String, Long>()
 
     val installedVersionName = Updater.installedVersionName(app)
     private val installedVersionCode = Updater.installedVersionCode(app)
@@ -141,6 +191,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun open(account: Account) {
         if (account.id == current?.id && library != null) {
+            pendingHomeFocus = true
             screen = Screen.Home
             return
         }
@@ -150,6 +201,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         selectedCategory = if (favorites.isNotEmpty()) CAT_FAVORITES else CAT_ALL
         lastChannelId = null
         library = null
+        section = Section.LIVE
+        vodCategories.clear()
+        vodSelected.clear()
+        vodItems.clear()
+        vodLoading.clear()
+        vodErrors.clear()
+        seasons = null
+        seasonsOf = null
+        epg.clear()
+        epgFetched.clear()
+        pendingHomeFocus = true
         screen = Screen.Home
         load(account, force = false)
     }
@@ -213,11 +275,156 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return repository.resolve(account, channel)
     }
 
+    // ---- Guide TV ----
+
+    /** Programme en cours/suivant d'une chaîne, gardé 15 min en mémoire. */
+    fun requestEpg(channel: Channel) {
+        val account = current ?: return
+        if (account.type == SourceType.M3U) return
+        val now = System.currentTimeMillis()
+        val last = epgFetched[channel.id]
+        val list = epg[channel.id]
+        val outdated = list != null && list.none { it.end > now }
+        if (last != null && now - last < EPG_REFRESH_AFTER_MS && !(outdated && now - last > 60_000)) return
+        epgFetched[channel.id] = now
+        viewModelScope.launch {
+            runCatching { repository.shortEpg(account, channel) }
+                .onSuccess { if (current?.id == account.id) epg[channel.id] = it }
+        }
+    }
+
+    // ---- Films et séries ----
+
+    fun vodKey(kind: VodKind, categoryId: String) = "$kind|$categoryId"
+
+    fun loadVodCategories(kind: VodKind, force: Boolean = false) {
+        val account = current ?: return
+        val key = "$kind|categories"
+        if (vodLoading[key] == true || (!force && vodCategories.containsKey(kind))) return
+        vodLoading[key] = true
+        viewModelScope.launch {
+            try {
+                val cached = withContext(Dispatchers.IO) { repository.cachedVodCategories(account, kind) }
+                if (cached != null) vodCategories[kind] = cached.items
+                if (cached != null && !force && System.currentTimeMillis() - cached.updatedAt < VOD_REFRESH_AFTER_MS) return@launch
+                val fresh = repository.vodCategories(account, kind)
+                if (current?.id == account.id) {
+                    vodCategories[kind] = fresh
+                    vodErrors.remove(key)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!vodCategories.containsKey(kind)) vodErrors[key] = "Chargement impossible : ${friendly(e)}"
+            } finally {
+                vodLoading[key] = false
+            }
+        }
+    }
+
+    fun loadVodItems(kind: VodKind, categoryId: String, force: Boolean = false) {
+        val account = current ?: return
+        val key = vodKey(kind, categoryId)
+        if (vodLoading[key] == true || (!force && vodItems.containsKey(key))) return
+        vodLoading[key] = true
+        viewModelScope.launch {
+            try {
+                val cached = withContext(Dispatchers.IO) { repository.cachedVodItems(account, kind, categoryId) }
+                if (cached != null) vodItems[key] = cached.items
+                if (cached != null && !force && System.currentTimeMillis() - cached.updatedAt < VOD_REFRESH_AFTER_MS) return@launch
+                val fresh = repository.vodItems(account, kind, categoryId)
+                if (current?.id == account.id) {
+                    vodItems[key] = fresh
+                    vodErrors.remove(key)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!vodItems.containsKey(key)) vodErrors[key] = "Chargement impossible : ${friendly(e)}"
+            } finally {
+                vodLoading[key] = false
+            }
+        }
+    }
+
+    fun openVod(item: VodItem) {
+        if (item.kind == VodKind.SERIES) openSeries(item) else playMovie(item)
+    }
+
+    private fun playMovie(item: VodItem) {
+        val playable = Playable(movieKey(item), item.name, item.year, item.url)
+        screen = Screen.VodPlayer(listOf(playable), 0, Screen.Home)
+    }
+
+    private fun openSeries(item: VodItem) {
+        val account = current ?: return
+        screen = Screen.Series(item)
+        if (seasonsOf == item.id && seasons != null) return
+        seasonsOf = item.id
+        seasons = null
+        seasonsError = null
+        seriesSeason = 0
+        seriesEpisode = -1
+        viewModelScope.launch {
+            try {
+                val result = repository.seasons(account, item)
+                if (seasonsOf == item.id) {
+                    seasons = result
+                    if (result.isEmpty()) seasonsError = "Aucun épisode trouvé pour cette série."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (seasonsOf == item.id) seasonsError = "Chargement impossible : ${friendly(e)}"
+            }
+        }
+    }
+
+    fun playEpisodes(series: VodItem, episodes: List<Episode>, index: Int) {
+        val playables = episodes.map {
+            Playable(episodeKey(series, it), series.name, "S${it.season} · É${it.number} · ${it.title}", it.url, it.stalkerSeries)
+        }
+        screen = Screen.VodPlayer(playables, index, Screen.Series(series))
+    }
+
+    fun exitVodPlayer(back: Screen) {
+        resumeVersion++
+        if (back == Screen.Home) pendingHomeFocus = true
+        screen = back
+    }
+
+    fun closeSeries() {
+        pendingHomeFocus = true
+        screen = Screen.Home
+    }
+
+    fun movieKey(item: VodItem) = "m:${item.id}"
+
+    fun episodeKey(series: VodItem, episode: Episode) = "e:${series.id}:${episode.id}"
+
+    /** Lire [resumeVersion] fait se mettre à jour l'affichage quand une position change. */
+    fun resumeOf(key: String): ResumeStore.Position? {
+        resumeVersion
+        val account = current ?: return null
+        return resumeStore.get(account.id, key)
+    }
+
+    fun saveResume(key: String, positionMs: Long, durationMs: Long) {
+        val account = current ?: return
+        resumeStore.set(account.id, key, positionMs, durationMs)
+    }
+
+    suspend fun resolveVod(playable: Playable): StreamRequest {
+        val account = current ?: throw IOException("aucun compte ouvert")
+        return repository.resolveVod(account, playable)
+    }
+
     fun onChannelShown(channel: Channel) {
         lastChannelId = channel.id
     }
 
     fun exitPlayer() {
+        pendingHomeFocus = true
         screen = Screen.Home
     }
 
@@ -253,6 +460,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         accounts = accounts - account
         accountStore.save(accounts)
         repository.cache.delete(account.id)
+        repository.vodCache.deleteAccount(account.id)
         favoritesStore.remove(account.id)
         if (current?.id == account.id) {
             loadJob?.cancel()

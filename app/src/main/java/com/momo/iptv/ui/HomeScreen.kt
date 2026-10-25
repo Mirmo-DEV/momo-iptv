@@ -45,6 +45,11 @@ import com.momo.iptv.AppViewModel
 import com.momo.iptv.CAT_ALL
 import com.momo.iptv.CAT_FAVORITES
 import com.momo.iptv.Library
+import com.momo.iptv.Section
+import com.momo.iptv.data.SourceType
+import com.momo.iptv.data.VodKind
+import com.momo.iptv.data.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -70,13 +75,23 @@ fun HomeScreen(vm: AppViewModel) {
                     color = Palette.TextDim,
                 )
             }
-            TvButton("Actualiser", vm::refresh)
-            Spacer(Modifier.width(12.dp))
+            if (account.type != SourceType.M3U) {
+                SectionTab("Direct", vm.section == Section.LIVE) { vm.section = Section.LIVE }
+                SectionTab("Films", vm.section == Section.MOVIES) { vm.section = Section.MOVIES }
+                SectionTab("Séries", vm.section == Section.SERIES) { vm.section = Section.SERIES }
+                Spacer(Modifier.width(24.dp))
+            }
+            if (vm.section == Section.LIVE) {
+                TvButton("Actualiser", vm::refresh)
+                Spacer(Modifier.width(12.dp))
+            }
             TvButton("Comptes", vm::goToAccounts)
         }
         Spacer(Modifier.height(16.dp))
 
         when {
+            vm.section == Section.MOVIES -> VodBrowser(vm, VodKind.MOVIE)
+            vm.section == Section.SERIES -> VodBrowser(vm, VodKind.SERIES)
             library != null -> Lists(vm, library)
             vm.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -87,6 +102,14 @@ fun HomeScreen(vm: AppViewModel) {
             }
             else -> LoadFailed(vm)
         }
+    }
+}
+
+/** Onglet : il suffit de passer dessus pour changer de rubrique. */
+@Composable
+private fun SectionTab(label: String, selected: Boolean, onSelect: () -> Unit) {
+    TvItem(onClick = onSelect, onFocus = onSelect, selected = selected, modifier = Modifier.padding(end = 6.dp)) {
+        Text(label, fontSize = 18.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
     }
 }
 
@@ -150,6 +173,8 @@ private fun Lists(vm: AppViewModel, library: Library) {
 
     LaunchedEffect(Unit) {
         withFrameNanos { }
+        // Pas de saut de focus quand on change simplement d'onglet.
+        if (!vm.consumeHomeFocus()) return@LaunchedEffect
         if (vm.lastChannelId != null && channels.any { it.id == vm.lastChannelId }) focusChannels() else focusCategories()
     }
 
@@ -220,12 +245,42 @@ private fun Lists(vm: AppViewModel, library: Library) {
                     }
                 }
             }
+            channels.getOrNull(channelIndex)?.let { EpgStrip(vm, it) }
             Text(
                 "OK : regarder   ·   Menu ≡ : ajouter/retirer des favoris   ·   Retour : comptes",
                 fontSize = 14.sp,
                 color = Palette.TextDim,
                 modifier = Modifier.padding(top = 8.dp),
             )
+        }
+    }
+}
+
+/** Programme en cours et suivant de la chaîne sélectionnée. */
+@Composable
+private fun EpgStrip(vm: AppViewModel, channel: Channel) {
+    LaunchedEffect(channel.id) {
+        delay(400)
+        vm.requestEpg(channel)
+    }
+    val now = System.currentTimeMillis()
+    val programmes = vm.epg[channel.id].orEmpty().filter { it.end > now }
+    val current = programmes.firstOrNull { it.start <= now }
+    val next = programmes.firstOrNull { it.start > now }
+    if (current == null && next == null) return
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .background(Palette.Panel, RoundedCornerShape(10.dp))
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        current?.let { p ->
+            Text("En ce moment · ${timeRange(p)}  ${p.title}", fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            ProgressLine(((now - p.start).toFloat() / (p.end - p.start).coerceAtLeast(1)).coerceIn(0f, 1f))
+        }
+        next?.let { p ->
+            Text("Ensuite · ${timeRange(p)}  ${p.title}", fontSize = 14.sp, color = Palette.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

@@ -119,18 +119,24 @@ class StalkerClient(val account: Account) {
         return true
     }
 
-    /** Liste paginée (≈ 14 chaînes par page) : on lit la première page puis les suivantes en parallèle. */
     private fun readOrderedList(builder: PlaylistBuilder): Int {
-        fun page(p: Int): JsonObject? = getJs(
-            api(
-                "itv", "get_ordered_list",
-                "genre" to "*", "force_ch_link_check" to "", "fav" to "0", "sortby" to "number", "hd" to "0", "p" to p.toString(),
-            ),
-        ) as? JsonObject
+        var count = 0
+        fetchPages("itv", "genre" to "*", "force_ch_link_check" to "", "fav" to "0", "sortby" to "number", "hd" to "0")
+            .forEach { o -> if (addChannel(builder) { key -> o.text(key) }) count++ }
+        return count
+    }
 
-        val first = page(1) ?: return 0
-        val firstData = first["data"] as? JsonArray ?: return 0
-        if (firstData.isEmpty()) return 0
+    /**
+     * Liste paginée (≈ 14 éléments par page) : on lit la première page,
+     * puis les suivantes en parallèle.
+     */
+    private fun fetchPages(type: String, vararg params: Pair<String, String>): List<JsonObject> {
+        fun page(p: Int): JsonObject? =
+            getJs(api(type, "get_ordered_list", *params, "p" to p.toString())) as? JsonObject
+
+        val first = page(1) ?: return emptyList()
+        val firstData = first["data"] as? JsonArray ?: return emptyList()
+        if (firstData.isEmpty()) return emptyList()
         val total = first.text("total_items")?.toIntOrNull() ?: firstData.size
         val perPage = first.text("max_page_items")?.toIntOrNull()?.takeIf { it > 0 } ?: firstData.size
         val pages = ((total + perPage - 1) / perPage).coerceIn(1, MAX_PAGES)
@@ -146,14 +152,128 @@ class StalkerClient(val account: Account) {
                 pool.shutdown()
             }
         }
-        var count = 0
-        all.forEach { data ->
-            data.forEach { element ->
-                val o = element as? JsonObject ?: return@forEach
-                if (addChannel(builder) { key -> o.text(key) }) count++
-            }
+        return all.flatMap { data -> data.mapNotNull { it as? JsonObject } }
+    }
+
+    // ---- Films et séries ----
+
+    private fun sectionOf(kind: VodKind) = if (kind == VodKind.MOVIE) "vod" else "series"
+
+    @Synchronized
+    fun vodCategories(kind: VodKind): List<Category> {
+        if (token == null) handshake()
+        val js = runCatching { getJs(api(sectionOf(kind), "get_categories")) }.getOrNull()
+        return (js as? JsonArray).orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            val id = o.text("id")?.takeIf { it != "*" } ?: return@mapNotNull null
+            Category(id, o.text("title")?.ifBlank { null } ?: "Catégorie $id")
         }
-        return count
+    }
+
+    @Synchronized
+    fun vodItems(kind: VodKind, categoryId: String): List<VodItem> {
+        if (token == null) handshake()
+        val section = sectionOf(kind)
+        return fetchPages(section, "category" to categoryId, "genre" to categoryId, "sortby" to "added", "fav" to "0", "hd" to "0")
+            .mapNotNull { o ->
+                val id = o.text("id") ?: return@mapNotNull null
+                val episodes = (o["series"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content?.toIntOrNull() }
+                val isSeries = kind == VodKind.SERIES || episodes.isNotEmpty() || o.text("is_series") == "1"
+                VodItem(
+                    id = id,
+                    name = o.text("name")?.trim()?.ifEmpty { null } ?: "Titre $id",
+                    kind = if (isSeries) VodKind.SERIES else VodKind.MOVIE,
+                    categoryId = categoryId,
+                    poster = (o.text("screenshot_uri") ?: o.text("cover_big") ?: o.text("pic"))
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { if (it.startsWith("http")) it else root.resolve(it)?.toString() },
+                    url = o.text("cmd").orEmpty(),
+                    year = o.text("year")?.takeIf { it.isNotBlank() && it != "0" }?.take(4),
+                    rating = (o.text("rating_imdb") ?: o.text("rating_kinopoisk"))?.takeIf { it.isNotBlank() && it != "0" && it != "N/A" },
+                    episodeNumbers = episodes,
+                    section = section,
+                )
+            }
+    }
+
+    @Synchronized
+    fun seasons(series: VodItem): List<Season> {
+        if (token == null) handshake()
+        // Anciens portails : les épisodes sont listés directement dans la fiche.
+        if (series.episodeNumbers.isNotEmpty()) {
+            return listOf(
+                Season(1, "Saison 1", series.episodeNumbers.sorted().map { n ->
+                    Episode("${series.id}-$n", 1, n, "Épisode $n", series.url, stalkerSeries = n)
+                }),
+            )
+        }
+        // Portails récents : saisons puis épisodes.
+        val seasons = fetchPages("series", "movie_id" to series.id, "season_id" to "0", "episode_id" to "0")
+        return seasons.mapIndexedNotNull { index, s ->
+            val seasonId = s.text("id") ?: return@mapIndexedNotNull null
+            val number = s.text("season_number")?.toIntOrNull() ?: (index + 1)
+            val inline = (s["series"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content?.toIntOrNull() }
+            val seasonCmd = s.text("cmd").orEmpty()
+            val episodes = if (inline.isNotEmpty() && seasonCmd.isNotBlank()) {
+                inline.sorted().map { n -> Episode("$seasonId-$n", number, n, "Épisode $n", seasonCmd, stalkerSeries = n) }
+            } else {
+                fetchPages("series", "movie_id" to series.id, "season_id" to seasonId, "episode_id" to "0").mapNotNull { e ->
+                    val epId = e.text("id") ?: return@mapNotNull null
+                    val n = e.text("series_number")?.toIntOrNull() ?: e.text("episode_number")?.toIntOrNull() ?: 0
+                    Episode(
+                        id = epId,
+                        season = number,
+                        number = n,
+                        title = e.text("name")?.takeIf { it.isNotBlank() } ?: "Épisode $n",
+                        url = e.text("cmd").orEmpty(),
+                    )
+                }.sortedBy { it.number }
+            }
+            if (episodes.isEmpty()) null else Season(number, s.text("name")?.takeIf { it.isNotBlank() } ?: "Saison $number", episodes)
+        }.sortedBy { it.number }
+    }
+
+    @Synchronized
+    fun resolveVod(cmd: String, series: Int?): StreamRequest {
+        if (token == null) handshake()
+        fun link(): String? = runCatching {
+            val js = getJs(
+                api(
+                    "vod", "create_link",
+                    "cmd" to cmd, "series" to (series?.toString() ?: ""), "forced_storage" to "", "disable_ad" to "0", "download" to "0",
+                ),
+            ) as? JsonObject
+            js?.text("cmd")?.takeIf { it.isNotBlank() }
+        }.getOrNull()
+        val result = link() ?: run {
+            handshake()
+            link()
+        }
+        val url = extractUrl(result ?: cmd) ?: throw IOException("lien de lecture introuvable")
+        return StreamRequest(url, USER_AGENT, streamHeaders)
+    }
+
+    /** Programme en cours et suivants d'une chaîne. */
+    @Synchronized
+    fun shortEpg(channel: Channel): List<Programme> {
+        if (token == null) handshake()
+        val js = runCatching { getJs(api("itv", "get_short_epg", "ch_id" to channel.id.substringBefore('#'), "size" to "4")) }.getOrNull()
+        val list = when (js) {
+            is JsonArray -> js
+            is JsonObject -> js["data"] as? JsonArray
+            else -> null
+        }
+        return list.orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            val start = o.text("start_timestamp")?.toLongOrNull() ?: return@mapNotNull null
+            val end = o.text("stop_timestamp")?.toLongOrNull() ?: return@mapNotNull null
+            Programme(
+                title = o.text("name")?.takeIf { it.isNotBlank() } ?: "Programme",
+                start = start * 1000,
+                end = end * 1000,
+                description = o.text("descr")?.takeIf { it.isNotBlank() },
+            )
+        }
     }
 
     private fun describeProfile(profile: JsonObject?): String {

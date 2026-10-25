@@ -25,6 +25,9 @@ import com.momo.iptv.ui.HomeScreen
 import com.momo.iptv.ui.Palette
 import com.momo.iptv.ui.PlayerScreen
 import com.momo.iptv.ui.UpdateDialog
+import com.momo.iptv.ui.SeriesScreen
+import com.momo.iptv.ui.VodPlayerScreen
+import androidx.compose.runtime.key
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
@@ -56,10 +59,12 @@ private fun App(vm: AppViewModel = viewModel()) {
             is Screen.EditAccount -> AccountEditScreen(vm, screen.account)
             Screen.Home -> HomeScreen(vm)
             is Screen.Player -> PlayerScreen(vm, screen)
+            is Screen.Series -> SeriesScreen(vm, screen.series)
+            is Screen.VodPlayer -> key(screen) { VodPlayerScreen(vm, screen) }
         }
         MessageBar(vm.message, onTimeout = vm::clearMessage, modifier = Modifier.align(Alignment.BottomCenter))
         // Pas de pop-up par-dessus la vidéo : elle apparaîtra en sortant du lecteur.
-        if (vm.screen !is Screen.Player) UpdateDialog(vm)
+        if (vm.screen !is Screen.Player && vm.screen !is Screen.VodPlayer) UpdateDialog(vm)
     }
 }
 

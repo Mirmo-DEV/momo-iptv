@@ -58,6 +58,7 @@ import coil.compose.AsyncImage
 import com.momo.iptv.AppViewModel
 import com.momo.iptv.Screen
 import com.momo.iptv.data.Channel
+import com.momo.iptv.data.Programme
 import com.momo.iptv.player.LivePlayer
 import com.momo.iptv.player.LivePlayer.Status
 import kotlinx.coroutines.delay
@@ -104,6 +105,7 @@ fun PlayerScreen(vm: AppViewModel, screen: Screen.Player) {
     // Zapping : le nom s'affiche tout de suite, le flux s'ouvre quand on arrête d'appuyer.
     LaunchedEffect(index) {
         vm.onChannelShown(channels[index])
+        vm.requestEpg(channels[index])
         if (firstPlay[0]) {
             firstPlay[0] = false
         } else {
@@ -192,6 +194,7 @@ fun PlayerScreen(vm: AppViewModel, screen: Screen.Player) {
                 channel = channel,
                 favorite = channel.id in favoriteSet,
                 status = status,
+                programmes = vm.epg[channel.id].orEmpty(),
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -225,7 +228,17 @@ fun PlayerScreen(vm: AppViewModel, screen: Screen.Player) {
 }
 
 @Composable
-private fun InfoBar(number: Int, channel: Channel, favorite: Boolean, status: Status, modifier: Modifier) {
+private fun InfoBar(
+    number: Int,
+    channel: Channel,
+    favorite: Boolean,
+    status: Status,
+    programmes: List<Programme>,
+    modifier: Modifier,
+) {
+    val now = System.currentTimeMillis()
+    val current = programmes.firstOrNull { it.start <= now && it.end > now }
+    val next = programmes.firstOrNull { it.start > now }
     Row(
         modifier
             .fillMaxWidth()
@@ -248,6 +261,13 @@ private fun InfoBar(number: Int, channel: Channel, favorite: Boolean, status: St
                 overflow = TextOverflow.Ellipsis,
                 color = Palette.Text,
             )
+            current?.let { p ->
+                Text("${timeRange(p)}  ${p.title}", fontSize = 17.sp, color = Palette.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                ProgressLine(((now - p.start).toFloat() / (p.end - p.start).coerceAtLeast(1)).coerceIn(0f, 1f))
+            }
+            next?.let { p ->
+                Text("Ensuite ${timeRange(p)}  ${p.title}", fontSize = 14.sp, color = Palette.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             val statusText = when (status) {
                 Status.Idle, Status.Buffering -> "Chargement…"
                 Status.Playing -> "▲▼ zapper  ·  OK liste des chaînes  ·  Menu ≡ favori"
