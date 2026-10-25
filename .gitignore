@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+# Clé de signature : ne jamais publier
+.signing/
+*.p12
+*.jks
+*.keystore

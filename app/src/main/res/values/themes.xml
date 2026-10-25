@@ -1,0 +1,7 @@
+<resources>
+    <color name="bg">#FF0B0F17</color>
+    <style name="Theme.Momo" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorAccent">#FF2F7CF6</item>
+    </style>
+</resources>
