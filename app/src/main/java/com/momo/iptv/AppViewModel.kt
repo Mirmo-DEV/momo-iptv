@@ -14,6 +14,8 @@ import com.momo.iptv.data.FavoritesStore
 import com.momo.iptv.data.Playlist
 import com.momo.iptv.data.PlaylistRepository
 import com.momo.iptv.data.Episode
+import com.momo.iptv.data.HistoryEntry
+import com.momo.iptv.data.LibraryStore
 import com.momo.iptv.data.Playable
 import com.momo.iptv.data.Programme
 import com.momo.iptv.data.ResumeStore
@@ -42,10 +44,18 @@ sealed interface Screen {
     data object Home : Screen
     data class Player(val channels: List<Channel>, val startIndex: Int) : Screen
     data class Series(val series: VodItem) : Screen
-    data class VodPlayer(val items: List<Playable>, val startIndex: Int, val back: Screen) : Screen
+    data class MovieDetail(val item: VodItem) : Screen
+    data class VodPlayer(
+        val items: List<Playable>,
+        val startIndex: Int,
+        val back: Screen,
+        val source: VodItem,
+        /** Reprendre sans demander (depuis « Continuer à regarder »). */
+        val autoResume: Boolean = false,
+    ) : Screen
 }
 
-enum class Section { LIVE, MOVIES, SERIES }
+enum class Section { HOME, LIVE, MOVIES, SERIES, WATCHLIST }
 
 sealed interface UpdateState {
     data object None : UpdateState
@@ -75,6 +85,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val favoritesStore = FavoritesStore(app)
     private val repository = PlaylistRepository(app)
     private val resumeStore = ResumeStore(app)
+    private val libraryStore = LibraryStore(app)
     private var loadJob: Job? = null
 
     var accounts by mutableStateOf(accountStore.load())
@@ -102,7 +113,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     // ---- Films et séries ----
-    var section by mutableStateOf(Section.LIVE)
+    var section by mutableStateOf(Section.HOME)
+
+    /** Image d'ambiance derrière l'accueil (affiche de l'élément sélectionné). */
+    var ambient by mutableStateOf<String?>(null)
+    var movieDetail by mutableStateOf<VodItem?>(null)
+        private set
+    var watchlist by mutableStateOf<List<VodItem>>(emptyList())
+        private set
+    var history by mutableStateOf<List<HistoryEntry>>(emptyList())
+        private set
+    private var pendingEpisodeId: String? = null
     val vodCategories = mutableStateMapOf<VodKind, List<Category>>()
     val vodSelected = mutableStateMapOf<VodKind, String>()
     val vodItems = mutableStateMapOf<String, List<VodItem>>()
@@ -201,7 +222,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         selectedCategory = if (favorites.isNotEmpty()) CAT_FAVORITES else CAT_ALL
         lastChannelId = null
         library = null
-        section = Section.LIVE
+        watchlist = libraryStore.watchlist(account.id)
+        history = libraryStore.history(account.id)
+        section = Section.HOME
         vodCategories.clear()
         vodSelected.clear()
         vodItems.clear()
@@ -347,19 +370,49 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Film : fiche détaillée. Série : liste des épisodes. */
     fun openVod(item: VodItem) {
-        if (item.kind == VodKind.SERIES) openSeries(item) else playMovie(item)
+        if (item.kind == VodKind.SERIES) openSeries(item) else openMovie(item)
     }
 
-    private fun playMovie(item: VodItem) {
-        val playable = Playable(movieKey(item), item.name, item.year, item.url)
-        screen = Screen.VodPlayer(listOf(playable), 0, Screen.Home)
+    private fun openMovie(item: VodItem) {
+        val account = current ?: return
+        movieDetail = item
+        screen = Screen.MovieDetail(item)
+        if (item.description != null && item.backdrop != null) return
+        viewModelScope.launch {
+            val full = runCatching { repository.movieDetails(account, item) }.getOrNull() ?: return@launch
+            if (movieDetail?.id == item.id) movieDetail = full
+        }
     }
 
-    private fun openSeries(item: VodItem) {
+    fun playMovie(item: VodItem, back: Screen, autoResume: Boolean = false) {
+        val playable = Playable(movieKey(item), item.name, listOfNotNull(item.year, item.duration).joinToString("  ·  ").ifEmpty { null }, item.url)
+        screen = Screen.VodPlayer(listOf(playable), 0, back, item, autoResume)
+    }
+
+    fun closeMovie() {
+        pendingHomeFocus = true
+        screen = Screen.Home
+    }
+
+    /** Depuis « Continuer à regarder » : le film reprend directement, la série s'ouvre sur l'épisode en cours. */
+    fun continueWatching(entry: HistoryEntry) {
+        if (entry.item.kind == VodKind.MOVIE) {
+            playMovie(entry.item, Screen.Home, autoResume = true)
+        } else {
+            pendingEpisodeId = entry.episodeId
+            openSeries(entry.item, forceReload = seasonsOf != entry.item.id)
+        }
+    }
+
+    private fun openSeries(item: VodItem, forceReload: Boolean = false) {
         val account = current ?: return
         screen = Screen.Series(item)
-        if (seasonsOf == item.id && seasons != null) return
+        if (!forceReload && seasonsOf == item.id && seasons != null) {
+            applyPendingEpisode()
+            return
+        }
         seasonsOf = item.id
         seasons = null
         seasonsError = null
@@ -370,6 +423,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val result = repository.seasons(account, item)
                 if (seasonsOf == item.id) {
                     seasons = result
+                    applyPendingEpisode()
                     if (result.isEmpty()) seasonsError = "Aucun épisode trouvé pour cette série."
                 }
             } catch (e: CancellationException) {
@@ -380,17 +434,77 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Place la sélection sur l'épisode demandé par « Continuer à regarder ». */
+    private fun applyPendingEpisode() {
+        val target = pendingEpisodeId ?: return
+        val list = seasons ?: return
+        pendingEpisodeId = null
+        list.forEachIndexed { s, season ->
+            val e = season.episodes.indexOfFirst { it.id == target }
+            if (e >= 0) {
+                seriesSeason = s
+                seriesEpisode = e
+                return
+            }
+        }
+    }
+
     fun playEpisodes(series: VodItem, episodes: List<Episode>, index: Int) {
         val playables = episodes.map {
-            Playable(episodeKey(series, it), series.name, "S${it.season} · É${it.number} · ${it.title}", it.url, it.stalkerSeries)
+            Playable(episodeKey(series, it), series.name, "S${it.season} · É${it.number} · ${it.title}", it.url, it.stalkerSeries, it.id)
         }
-        screen = Screen.VodPlayer(playables, index, Screen.Series(series))
+        screen = Screen.VodPlayer(playables, index, Screen.Series(series), series)
     }
 
     fun exitVodPlayer(back: Screen) {
         resumeVersion++
         if (back == Screen.Home) pendingHomeFocus = true
+        if (back is Screen.MovieDetail) movieDetail = movieDetail?.takeIf { it.id == back.item.id } ?: back.item
         screen = back
+    }
+
+    // ---- Ma liste et historique ----
+
+    private fun VodItem.listKey() = "$kind:$id"
+
+    fun inWatchlist(item: VodItem): Boolean = watchlist.any { it.listKey() == item.listKey() }
+
+    fun toggleWatchlist(item: VodItem) {
+        val account = current ?: return
+        val adding = !inWatchlist(item)
+        watchlist = if (adding) listOf(item) + watchlist else watchlist.filterNot { it.listKey() == item.listKey() }
+        libraryStore.saveWatchlist(account.id, watchlist)
+        message = if (adding) "✓ « ${item.name} » ajouté à Ma liste" else "« ${item.name} » retiré de Ma liste"
+    }
+
+    /** Appelé au lancement d'un film/épisode : le remonte en tête de « Continuer à regarder ». */
+    fun onPlaybackStarted(source: VodItem, playable: Playable) {
+        val account = current ?: return
+        val entry = HistoryEntry(
+            item = source,
+            key = playable.key,
+            episodeId = playable.episodeId,
+            episodeLabel = playable.subtitle.takeIf { source.kind == VodKind.SERIES },
+            updatedAt = System.currentTimeMillis(),
+        )
+        history = (listOf(entry) + history.filterNot { it.item.listKey() == source.listKey() }).take(40)
+        libraryStore.saveHistory(account.id, history)
+    }
+
+    /** Films et épisodes commencés mais pas finis, du plus récent au plus ancien. */
+    fun continueList(): List<HistoryEntry> {
+        resumeVersion
+        return history.filter { entry ->
+            val position = resumeOf(entry.key)
+            position != null && position.positionMs > 0 && !position.finished
+        }
+    }
+
+    fun removeFromContinue(entry: HistoryEntry) {
+        val account = current ?: return
+        history = history.filterNot { it.key == entry.key }
+        libraryStore.saveHistory(account.id, history)
+        message = "« ${entry.item.name} » retiré de Continuer à regarder"
     }
 
     fun closeSeries() {
@@ -461,6 +575,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         accountStore.save(accounts)
         repository.cache.delete(account.id)
         repository.vodCache.deleteAccount(account.id)
+        libraryStore.remove(account.id)
         favoritesStore.remove(account.id)
         if (current?.id == account.id) {
             loadJob?.cancel()

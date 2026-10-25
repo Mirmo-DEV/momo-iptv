@@ -32,6 +32,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -126,8 +133,14 @@ fun VodPlayerScreen(vm: AppViewModel, screen: Screen.VodPlayer) {
         error = null
         retries = 0
         startAt = null
+        vm.onPlaybackStarted(screen.source, items[index])
         val saved = vm.resumeOf(items[index].key)
-        if (saved != null && saved.positionMs > RESUME_MIN_MS && !saved.finished) askResume = saved.positionMs else startAt = 0L
+        val resumable = saved != null && saved.positionMs > RESUME_MIN_MS && !saved.finished
+        when {
+            resumable && screen.autoResume && index == screen.startIndex -> startAt = saved!!.positionMs
+            resumable -> askResume = saved!!.positionMs
+            else -> startAt = 0L
+        }
     }
 
     LaunchedEffect(index, startAt, loadTick) {
@@ -319,13 +332,17 @@ fun VodPlayerScreen(vm: AppViewModel, screen: Screen.VodPlayer) {
             !playing && askResume == null -> Text("❚❚", fontSize = 56.sp, color = Color.White, modifier = Modifier.align(Alignment.Center))
         }
 
-        if (overlay || !playing || error != null) {
+        AnimatedVisibility(
+            visible = overlay || !playing || error != null,
+            enter = slideInVertically(tween(280)) { it / 2 } + fadeIn(tween(280)),
+            exit = slideOutVertically(tween(220)) { it / 2 } + fadeOut(tween(220)),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
             Column(
                 Modifier
-                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .padding(horizontal = 48.dp, vertical = 32.dp)
-                    .background(Color(0xD90B0F17), RoundedCornerShape(14.dp))
+                    .background(Brush.verticalGradient(listOf(Color(0xCC111827), Color(0xF207090F))), RoundedCornerShape(18.dp))
                     .padding(horizontal = 24.dp, vertical = 16.dp),
             ) {
                 Text(item.title, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -68,6 +68,33 @@ class ResumeStore(context: Context) {
     }
 }
 
+/** « Ma liste » (films et séries à voir) et historique de lecture, par compte. */
+class LibraryStore(context: Context) {
+    private val prefs = context.getSharedPreferences("library", Context.MODE_PRIVATE)
+
+    fun watchlist(accountId: String): List<VodItem> =
+        prefs.getString("watch_$accountId", null)
+            ?.let { runCatching { json.decodeFromString<List<VodItem>>(it) }.getOrNull() }
+            ?: emptyList()
+
+    fun saveWatchlist(accountId: String, items: List<VodItem>) {
+        prefs.edit().putString("watch_$accountId", json.encodeToString(items)).apply()
+    }
+
+    fun history(accountId: String): List<HistoryEntry> =
+        prefs.getString("history_$accountId", null)
+            ?.let { runCatching { json.decodeFromString<List<HistoryEntry>>(it) }.getOrNull() }
+            ?: emptyList()
+
+    fun saveHistory(accountId: String, entries: List<HistoryEntry>) {
+        prefs.edit().putString("history_$accountId", json.encodeToString(entries)).apply()
+    }
+
+    fun remove(accountId: String) {
+        prefs.edit().remove("watch_$accountId").remove("history_$accountId").apply()
+    }
+}
+
 /** Copie locale des catalogues films/séries, par catégorie. */
 class VodCache(context: Context) {
     private val dir = File(context.filesDir, "vod").apply { mkdirs() }

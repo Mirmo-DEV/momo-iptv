@@ -36,6 +36,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -188,25 +197,34 @@ fun PlayerScreen(vm: AppViewModel, screen: Screen.Player) {
             CircularProgressIndicator(color = Palette.Accent, modifier = Modifier.align(Alignment.Center).size(56.dp))
         }
 
-        if (showInfo || status !is Status.Playing) {
+        AnimatedVisibility(
+            visible = showInfo || status !is Status.Playing,
+            enter = slideInVertically(tween(280)) { it / 2 } + fadeIn(tween(280)),
+            exit = slideOutVertically(tween(220)) { it / 2 } + fadeOut(tween(220)),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
             InfoBar(
                 number = index + 1,
                 channel = channel,
                 favorite = channel.id in favoriteSet,
                 status = status,
                 programmes = vm.epg[channel.id].orEmpty(),
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier,
             )
         }
 
-        if (panelOpen) {
+        AnimatedVisibility(
+            visible = panelOpen,
+            enter = slideInHorizontally(tween(260)) { -it } + fadeIn(tween(260)),
+            exit = slideOutHorizontally(tween(200)) { -it } + fadeOut(tween(200)),
+            modifier = Modifier.align(Alignment.CenterStart),
+        ) {
             LazyColumn(
                 state = panelState,
                 modifier = Modifier
-                    .align(Alignment.CenterStart)
                     .fillMaxHeight()
                     .width(460.dp)
-                    .background(Color(0xE60B0F17))
+                    .background(Brush.horizontalGradient(listOf(Color(0xF207090F), Color(0xD907090F))))
                     .padding(horizontal = 12.dp, vertical = 24.dp),
             ) {
                 itemsIndexed(channels, key = { _, c -> c.id }) { i, ch ->
@@ -243,7 +261,7 @@ private fun InfoBar(
         modifier
             .fillMaxWidth()
             .padding(horizontal = 48.dp, vertical = 32.dp)
-            .background(Color(0xD90B0F17), RoundedCornerShape(14.dp))
+            .background(Brush.verticalGradient(listOf(Color(0xCC111827), Color(0xF207090F))), RoundedCornerShape(18.dp))
             .padding(horizontal = 24.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -66,6 +66,13 @@ class PlaylistRepository(context: Context) {
         list
     }
 
+    suspend fun movieDetails(account: Account, movie: VodItem): VodItem = withContext(Dispatchers.IO) {
+        when (account.type) {
+            SourceType.XTREAM -> XtreamSource.movieDetails(account, movie)
+            else -> movie
+        }
+    }
+
     suspend fun seasons(account: Account, series: VodItem): List<Season> = withContext(Dispatchers.IO) {
         when (account.type) {
             SourceType.XTREAM -> XtreamSource.seasons(account, series)

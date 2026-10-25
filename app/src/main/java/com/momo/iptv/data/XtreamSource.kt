@@ -117,10 +117,38 @@ object XtreamSource {
                     poster = o["cover"]?.takeIf { it.isNotBlank() },
                     rating = o["rating"]?.takeIf { it.isNotBlank() && it != "0" },
                     year = (o["releaseDate"] ?: o["release_date"])?.take(4)?.takeIf { it.isNotBlank() },
+                    description = o["plot"]?.takeIf { it.isNotBlank() },
+                    genre = o["genre"]?.takeIf { it.isNotBlank() },
+                    director = o["director"]?.takeIf { it.isNotBlank() },
+                    cast = o["cast"]?.takeIf { it.isNotBlank() },
                 )
             }
         }
         return out
+    }
+
+    /** Fiche complète d'un film (résumé, casting, durée, image de fond). */
+    fun movieDetails(account: Account, movie: VodItem): VodItem {
+        val server = Server(account)
+        val root = getJson(server.url("get_vod_info", "vod_id" to movie.id)) as? JsonObject ?: return movie
+        val info = root["info"] as? JsonObject ?: return movie
+        val backdrop = when (val b = info["backdrop_path"]) {
+            is JsonArray -> (b.firstOrNull() as? JsonPrimitive)?.content
+            is JsonPrimitive -> b.content
+            else -> null
+        }?.takeIf { it.startsWith("http") }
+        val seconds = info.text("duration_secs")?.toLongOrNull()
+        return movie.copy(
+            description = info.text("plot")?.takeIf { it.isNotBlank() } ?: info.text("description")?.takeIf { it.isNotBlank() },
+            genre = info.text("genre")?.takeIf { it.isNotBlank() },
+            director = info.text("director")?.takeIf { it.isNotBlank() },
+            cast = (info.text("cast") ?: info.text("actors"))?.takeIf { it.isNotBlank() },
+            duration = seconds?.takeIf { it > 0 }?.let { readableDuration(it / 60) },
+            backdrop = backdrop,
+            poster = movie.poster ?: info.text("movie_image")?.takeIf { it.startsWith("http") },
+            year = movie.year ?: info.text("releasedate")?.take(4)?.takeIf { it.isNotBlank() },
+            rating = movie.rating ?: info.text("rating")?.takeIf { it.isNotBlank() && it != "0" },
+        )
     }
 
     fun seasons(account: Account, series: VodItem): List<Season> {

@@ -1,6 +1,19 @@
 package com.momo.iptv.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -58,58 +71,103 @@ import java.util.Locale
 @Composable
 fun HomeScreen(vm: AppViewModel) {
     val account = vm.current ?: return
-    val library = vm.library
     BackHandler { vm.goToAccounts() }
+    val sections = if (account.type == SourceType.M3U) {
+        listOf(Section.HOME to "Accueil", Section.LIVE to "Direct")
+    } else {
+        listOf(Section.HOME to "Accueil", Section.LIVE to "Direct", Section.MOVIES to "Films", Section.SERIES to "Séries", Section.WATCHLIST to "Ma liste")
+    }
+    if (vm.section !in sections.map { it.first }) vm.section = Section.HOME
+    // L'image d'ambiance ne concerne que les rubriques films/séries.
+    if (vm.section == Section.LIVE) vm.ambient = null
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 28.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(account.name, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+    Box(Modifier.fillMaxSize()) {
+        AmbientBackdrop(vm.ambient)
+        Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 24.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    when {
-                        vm.refreshing -> "Mise à jour de la liste en arrière-plan…"
-                        library != null -> "${library.playlist.channels.size} chaînes · liste du ${formatDate(library.playlist.updatedAt)}"
-                        else -> ""
-                    },
-                    fontSize = 14.sp,
-                    color = Palette.TextDim,
+                    "MOMO",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Palette.Accent,
+                    letterSpacing = 3.sp,
                 )
+                Spacer(Modifier.width(28.dp))
+                sections.forEach { (section, label) ->
+                    NavTab(label, vm.section == section) { vm.section = section }
+                }
+                Spacer(Modifier.weight(1f))
+                AnimatedVisibility(vm.refreshing, enter = fadeIn(), exit = fadeOut()) {
+                    Text("Mise à jour…", fontSize = 13.sp, color = Palette.TextDim, modifier = Modifier.padding(end = 14.dp))
+                }
+                if (vm.section == Section.LIVE) {
+                    TvButton("⟳  Actualiser", vm::refresh)
+                    Spacer(Modifier.width(10.dp))
+                }
+                TvButton(account.name, vm::goToAccounts)
             }
-            if (account.type != SourceType.M3U) {
-                SectionTab("Direct", vm.section == Section.LIVE) { vm.section = Section.LIVE }
-                SectionTab("Films", vm.section == Section.MOVIES) { vm.section = Section.MOVIES }
-                SectionTab("Séries", vm.section == Section.SERIES) { vm.section = Section.SERIES }
-                Spacer(Modifier.width(24.dp))
-            }
-            if (vm.section == Section.LIVE) {
-                TvButton("Actualiser", vm::refresh)
-                Spacer(Modifier.width(12.dp))
-            }
-            TvButton("Comptes", vm::goToAccounts)
-        }
-        Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(18.dp))
 
-        when {
-            vm.section == Section.MOVIES -> VodBrowser(vm, VodKind.MOVIE)
-            vm.section == Section.SERIES -> VodBrowser(vm, VodKind.SERIES)
-            library != null -> Lists(vm, library)
-            vm.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Palette.Accent)
-                    Spacer(Modifier.height(16.dp))
-                    Text("Chargement de la liste… (seulement la première fois)", color = Palette.TextDim)
+            Crossfade(targetState = vm.section, animationSpec = tween(260), label = "rubrique") { section ->
+                when (section) {
+                    Section.HOME -> HomeFeed(vm)
+                    Section.MOVIES -> VodBrowser(vm, VodKind.MOVIE)
+                    Section.SERIES -> VodBrowser(vm, VodKind.SERIES)
+                    Section.WATCHLIST -> WatchlistGrid(vm)
+                    Section.LIVE -> LiveSection(vm)
                 }
             }
-            else -> LoadFailed(vm)
         }
     }
 }
 
-/** Onglet : il suffit de passer dessus pour changer de rubrique. */
 @Composable
-private fun SectionTab(label: String, selected: Boolean, onSelect: () -> Unit) {
-    TvItem(onClick = onSelect, onFocus = onSelect, selected = selected, modifier = Modifier.padding(end = 6.dp)) {
-        Text(label, fontSize = 18.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+private fun LiveSection(vm: AppViewModel) {
+    val library = vm.library
+    when {
+        library != null -> Lists(vm, library)
+        vm.loading -> Loading("Chargement de la liste… (seulement la première fois)")
+        else -> LoadFailed(vm)
+    }
+}
+
+/** Onglet de navigation : il suffit de passer dessus pour changer de rubrique. */
+@Composable
+private fun NavTab(label: String, selected: Boolean, onSelect: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val background by animateColorAsState(if (focused) Color.White else Color.Transparent, tween(160), label = "onglet")
+    val textColor by animateColorAsState(
+        when {
+            focused -> Palette.Bg
+            selected -> Palette.Text
+            else -> Palette.TextDim
+        },
+        tween(160),
+        label = "texte",
+    )
+    val underline by animateFloatAsState(if (selected && !focused) 1f else 0f, tween(220), label = "soulignement")
+    Column(
+        Modifier
+            .padding(end = 6.dp)
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onSelect()
+            }
+            .clip(RoundedCornerShape(50))
+            .background(background)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onSelect)
+            .padding(horizontal = 16.dp, vertical = 7.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(label, fontSize = 17.sp, fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Medium, color = textColor)
+        Box(
+            Modifier
+                .padding(top = 3.dp)
+                .height(3.dp)
+                .width(22.dp * underline)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Palette.Accent),
+        )
     }
 }
 

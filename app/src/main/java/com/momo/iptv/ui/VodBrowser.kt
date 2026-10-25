@@ -57,7 +57,7 @@ import com.momo.iptv.data.VodKind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private const val COLUMNS = 4
+private const val COLUMNS = 5
 
 @Composable
 fun VodBrowser(vm: AppViewModel, kind: VodKind) {
@@ -128,7 +128,7 @@ fun VodBrowser(vm: AppViewModel, kind: VodKind) {
             modifier = Modifier
                 .width(260.dp)
                 .fillMaxHeight()
-                .background(Palette.Panel, RoundedCornerShape(12.dp))
+                .background(Palette.Panel.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
                 .padding(8.dp),
         ) {
             itemsIndexed(categories, key = { _, c -> c.id }) { _, category ->
@@ -159,25 +159,31 @@ fun VodBrowser(vm: AppViewModel, kind: VodKind) {
             when {
                 items == null && vm.vodErrors[itemsKey] != null ->
                     Retry(vm.vodErrors[itemsKey].orEmpty()) { vm.loadVodItems(kind, selected, force = true) }
-                items == null -> Loading("Chargement…")
+                items == null -> PosterSkeletonGrid(COLUMNS)
                 items.isEmpty() -> Text("Rien dans cette catégorie.", color = Palette.TextDim, fontSize = 18.sp, modifier = Modifier.padding(16.dp))
                 else -> LazyVerticalGrid(
                     columns = GridCells.Fixed(COLUMNS),
                     state = gridState,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(10.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     itemsIndexed(items, key = { i, item -> "${item.id}#$i" }) { index, item ->
                         val resume = if (item.kind == VodKind.MOVIE) vm.resumeOf(vm.movieKey(item)) else null
                         PosterCard(
                             item = item,
-                            progress = resume?.takeIf { it.positionMs > 0 }?.fraction,
+                            progress = resume?.takeIf { it.positionMs > 0 && !it.finished }?.fraction,
+                            inWatchlist = vm.inWatchlist(item),
                             onClick = {
                                 vm.vodGridIndex[itemsKey] = index
                                 vm.openVod(item)
                             },
-                            onFocus = { gridIndex = index },
+                            onFocus = {
+                                gridIndex = index
+                                vm.ambient = item.backdrop ?: item.poster
+                            },
+                            onMenu = { vm.toggleWatchlist(item) },
                             modifier = Modifier
                                 .then(if (index == gridIndex) Modifier.focusRequester(gridFocus) else Modifier)
                                 .onPreviewKeyEvent { event ->
@@ -192,61 +198,6 @@ fun VodBrowser(vm: AppViewModel, kind: VodKind) {
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun PosterCard(
-    item: VodItem,
-    progress: Float?,
-    onClick: () -> Unit,
-    onFocus: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var focused by remember { mutableStateOf(false) }
-    Column(
-        modifier
-            .onFocusChanged {
-                if (it.isFocused != focused) {
-                    focused = it.isFocused
-                    if (it.isFocused) onFocus()
-                }
-            }
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (focused) Palette.Accent else Palette.Panel)
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
-            .padding(6.dp),
-    ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Palette.Selected),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(item.name, fontSize = 13.sp, textAlign = TextAlign.Center, color = Palette.TextDim, modifier = Modifier.padding(8.dp))
-            if (item.poster != null) {
-                AsyncImage(
-                    model = item.poster,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-        }
-        if (progress != null) ProgressLine(progress)
-        Text(
-            item.name,
-            fontSize = 14.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 4.dp),
-        )
-        val details = listOfNotNull(item.year, item.rating?.let { "★ $it" }).joinToString("  ·  ")
-        if (details.isNotEmpty()) {
-            Text(details, fontSize = 12.sp, color = if (focused) Palette.Text else Palette.TextDim, maxLines = 1)
         }
     }
 }

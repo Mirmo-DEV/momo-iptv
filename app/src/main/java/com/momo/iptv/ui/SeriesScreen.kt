@@ -27,6 +27,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
@@ -50,21 +51,32 @@ fun SeriesScreen(vm: AppViewModel, series: VodItem) {
     BackHandler { vm.closeSeries() }
     val seasons = vm.seasons
 
+    Box(Modifier.fillMaxSize()) {
+    HeroBackdrop(series.backdrop ?: series.poster, height = 330.dp)
     Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 28.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.Top) {
             if (series.poster != null) {
                 AsyncImage(
                     model = series.poster,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(60.dp, 90.dp).clip(RoundedCornerShape(6.dp)),
+                    modifier = Modifier.size(100.dp, 150.dp).shadow(18.dp, RoundedCornerShape(10.dp)).clip(RoundedCornerShape(10.dp)),
                 )
-                Spacer(Modifier.width(18.dp))
+                Spacer(Modifier.width(26.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(series.name, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val details = listOfNotNull(series.year, series.rating?.let { "★ $it" }).joinToString("  ·  ")
-                if (details.isNotEmpty()) Text(details, fontSize = 15.sp, color = Palette.TextDim)
+                Text(series.name, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                MetaChips(
+                    listOfNotNull(series.year, series.genre, seasons?.let { "${it.size} saison" + if (it.size > 1) "s" else "" }),
+                    series.rating,
+                    Modifier.padding(top = 8.dp),
+                )
+                series.description?.let {
+                    Text(it, fontSize = 15.sp, color = Palette.Text.copy(alpha = 0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 22.sp, modifier = Modifier.padding(top = 10.dp))
+                }
+                Row(Modifier.padding(top = 12.dp)) {
+                    TvButton(if (vm.inWatchlist(series)) "✓  Dans ma liste" else "＋  Ma liste", { vm.toggleWatchlist(series) })
+                }
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -73,6 +85,7 @@ fun SeriesScreen(vm: AppViewModel, series: VodItem) {
             vm.seasonsError != null -> Retry(vm.seasonsError.orEmpty()) { vm.openVod(series) }
             else -> Loading("Chargement des épisodes…")
         }
+    }
     }
 }
 

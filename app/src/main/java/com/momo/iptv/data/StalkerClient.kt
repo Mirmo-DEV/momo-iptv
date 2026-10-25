@@ -192,6 +192,11 @@ class StalkerClient(val account: Account) {
                     rating = (o.text("rating_imdb") ?: o.text("rating_kinopoisk"))?.takeIf { it.isNotBlank() && it != "0" && it != "N/A" },
                     episodeNumbers = episodes,
                     section = section,
+                    description = o.text("description")?.takeIf { it.isNotBlank() },
+                    genre = o.text("genres_str")?.takeIf { it.isNotBlank() },
+                    director = o.text("director")?.takeIf { it.isNotBlank() },
+                    cast = o.text("actors")?.takeIf { it.isNotBlank() },
+                    duration = o.text("time")?.toLongOrNull()?.takeIf { it > 0 }?.let { readableDuration(it) },
                 )
             }
     }
