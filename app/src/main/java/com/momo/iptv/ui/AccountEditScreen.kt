@@ -89,11 +89,10 @@ fun AccountEditScreen(vm: AppViewModel, existing: Account?) {
             }
         }
         if (error != null) return
-        val defaultName = when (type) {
-            SourceType.XTREAM -> "Xtream"
-            SourceType.M3U -> "Liste M3U"
-            SourceType.STALKER -> "Portail Stalker"
-        }
+        val defaultNames = mapOf(SourceType.XTREAM to "Xtream", SourceType.M3U to "Liste M3U", SourceType.STALKER to "Portail Stalker")
+        val defaultName = defaultNames.getValue(type)
+        // Un nom donné automatiquement suit le type du compte.
+        if (name.trim() in defaultNames.values) name = ""
         val usesServer = type == SourceType.XTREAM || type == SourceType.STALKER
         vm.saveAccount(
             Account(
