@@ -13,11 +13,13 @@ import com.momo.iptv.data.Channel
 import com.momo.iptv.data.FavoritesStore
 import com.momo.iptv.data.Playlist
 import com.momo.iptv.data.PlaylistRepository
+import com.momo.iptv.update.Updater
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -27,6 +29,14 @@ sealed interface Screen {
     data class EditAccount(val account: Account?) : Screen
     data object Home : Screen
     data class Player(val channels: List<Channel>, val startIndex: Int) : Screen
+}
+
+sealed interface UpdateState {
+    data object None : UpdateState
+    data class Available(val release: Updater.Release) : UpdateState
+    data class Downloading(val release: Updater.Release, val percent: Int) : UpdateState
+    data class Ready(val release: Updater.Release, val file: File) : UpdateState
+    data class Failed(val release: Updater.Release, val reason: String) : UpdateState
 }
 
 /** Liste de chaînes indexée pour un affichage rapide par catégorie. */
@@ -72,9 +82,59 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var lastChannelId by mutableStateOf<String?>(null)
         private set
 
+    val installedVersionName = Updater.installedVersionName(app)
+    private val installedVersionCode = Updater.installedVersionCode(app)
+
+    var update by mutableStateOf<UpdateState>(UpdateState.None)
+        private set
+
     init {
         // On rouvre directement le dernier compte utilisé.
         accountStore.lastAccountId?.let { id -> accounts.find { it.id == id } }?.let(::open)
+        checkForUpdate(manual = false)
+    }
+
+    fun checkForUpdate(manual: Boolean) {
+        if (update is UpdateState.Downloading) return
+        viewModelScope.launch {
+            try {
+                val release = Updater.latest()
+                if (release != null && release.versionCode > installedVersionCode) {
+                    update = UpdateState.Available(release)
+                } else if (manual) {
+                    message = "Vous avez déjà la dernière version ($installedVersionName)"
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (manual) message = "Vérification impossible : ${friendly(e)}"
+            }
+        }
+    }
+
+    fun downloadUpdate() {
+        val release = when (val u = update) {
+            is UpdateState.Available -> u.release
+            is UpdateState.Failed -> u.release
+            else -> return
+        }
+        update = UpdateState.Downloading(release, 0)
+        viewModelScope.launch {
+            update = try {
+                val file = Updater.download(getApplication(), release.apkUrl) { percent ->
+                    viewModelScope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(release, percent) }
+                }
+                UpdateState.Ready(release, file)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                UpdateState.Failed(release, friendly(e))
+            }
+        }
+    }
+
+    fun dismissUpdate() {
+        if (update !is UpdateState.Downloading) update = UpdateState.None
     }
 
     fun open(account: Account) {

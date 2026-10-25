@@ -18,7 +18,12 @@ Aucun identifiant n'est dans le code : les comptes se saisissent dans l'appli et
    https://github.com/Mirmo-DEV/momo-iptv/releases/latest/download/MomoIPTV.apk
    ```
 
-4. Installer. Pour mettre à jour plus tard : refaire la même chose, l'appli s'installe par-dessus en gardant comptes et favoris.
+4. Installer.
+
+**Mises à jour** : au démarrage, l'appli vérifie s'il existe une nouvelle version et propose de l'installer
+(pop-up « Mise à jour disponible »). Comptes et favoris sont conservés. Bouton « Rechercher une mise à jour »
+dans l'écran Comptes pour vérifier à la main. La première fois, Fire OS demande d'autoriser Momo IPTV
+dans *Options pour les développeurs → Installer des applis inconnues*.
 
 ## Télécommande
 

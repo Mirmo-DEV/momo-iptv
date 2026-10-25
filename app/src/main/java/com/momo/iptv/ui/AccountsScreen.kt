@@ -64,10 +64,18 @@ fun AccountsScreen(vm: AppViewModel) {
                     Text("＋  Ajouter un compte", fontSize = 20.sp)
                 }
             }
+            item(key = "update") {
+                TvItem(onClick = { vm.checkForUpdate(manual = true) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("⟳  Rechercher une mise à jour", fontSize = 20.sp)
+                }
+            }
         }
-        if (vm.accounts.isNotEmpty()) {
-            Text("Touche Menu ≡ sur un compte : modifier ou supprimer", fontSize = 15.sp, color = Palette.TextDim)
-        }
+        Text(
+            (if (vm.accounts.isNotEmpty()) "Touche Menu ≡ sur un compte : modifier ou supprimer   ·   " else "") +
+                "Version ${vm.installedVersionName}",
+            fontSize = 15.sp,
+            color = Palette.TextDim,
+        )
     }
 }
 
