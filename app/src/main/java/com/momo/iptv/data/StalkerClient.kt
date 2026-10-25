@@ -217,22 +217,30 @@ class StalkerClient(val account: Account) {
         return seasons.mapIndexedNotNull { index, s ->
             val seasonId = s.text("id") ?: return@mapIndexedNotNull null
             val number = s.text("season_number")?.toIntOrNull() ?: (index + 1)
-            val inline = (s["series"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content?.toIntOrNull() }
-            val seasonCmd = s.text("cmd").orEmpty()
-            val episodes = if (inline.isNotEmpty() && seasonCmd.isNotBlank()) {
-                inline.sorted().map { n -> Episode("$seasonId-$n", number, n, "Épisode $n", seasonCmd, stalkerSeries = n) }
-            } else {
+            // On demande d'abord les épisodes de la saison : chacun a sa propre commande de lecture.
+            // (La commande de la saison désigne parfois toute la série : le portail lançait alors la dernière saison.)
+            val fetched = runCatching {
                 fetchPages("series", "movie_id" to series.id, "season_id" to seasonId, "episode_id" to "0").mapNotNull { e ->
                     val epId = e.text("id") ?: return@mapNotNull null
+                    val cmd = e.text("cmd")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                     val n = e.text("series_number")?.toIntOrNull() ?: e.text("episode_number")?.toIntOrNull() ?: 0
                     Episode(
                         id = epId,
                         season = number,
                         number = n,
                         title = e.text("name")?.takeIf { it.isNotBlank() } ?: "Épisode $n",
-                        url = e.text("cmd").orEmpty(),
+                        url = cmd,
                     )
                 }.sortedBy { it.number }
+            }.getOrDefault(emptyList())
+            val inline = (s["series"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content?.toIntOrNull() }
+            val seasonCmd = s.text("cmd").orEmpty()
+            val episodes = fetched.ifEmpty {
+                if (inline.isNotEmpty() && seasonCmd.isNotBlank()) {
+                    inline.sorted().map { n -> Episode("$seasonId-$n", number, n, "Épisode $n", seasonCmd, stalkerSeries = n) }
+                } else {
+                    emptyList()
+                }
             }
             if (episodes.isEmpty()) null else Season(number, s.text("name")?.takeIf { it.isNotBlank() } ?: "Saison $number", episodes)
         }.sortedBy { it.number }
