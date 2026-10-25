@@ -3,7 +3,7 @@ package com.momo.iptv.data
 import kotlinx.serialization.Serializable
 
 @Serializable
-enum class SourceType { XTREAM, M3U }
+enum class SourceType { XTREAM, M3U, STALKER }
 
 /** Un compte IPTV. Saisi dans l'appli et stocké uniquement sur l'appareil. */
 @Serializable
@@ -17,6 +17,15 @@ data class Account(
     val m3uUrl: String = "",
     /** Xtream : flux en HLS (.m3u8) au lieu de MPEG-TS (.ts). */
     val useHls: Boolean = false,
+    /** Stalker : adresse MAC enregistrée chez le fournisseur ([server] = adresse du portail). */
+    val mac: String = "",
+)
+
+/** Ce qu'il faut au lecteur pour ouvrir un flux. */
+data class StreamRequest(
+    val url: String,
+    val userAgent: String = Http.USER_AGENT,
+    val headers: Map<String, String> = emptyMap(),
 )
 
 @Serializable

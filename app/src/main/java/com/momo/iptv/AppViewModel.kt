@@ -13,6 +13,7 @@ import com.momo.iptv.data.Channel
 import com.momo.iptv.data.FavoritesStore
 import com.momo.iptv.data.Playlist
 import com.momo.iptv.data.PlaylistRepository
+import com.momo.iptv.data.StreamRequest
 import com.momo.iptv.update.Updater
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +21,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -204,6 +206,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (channels.isEmpty()) return
         lastChannelId = channels[index].id
         screen = Screen.Player(channels, index)
+    }
+
+    suspend fun resolveStream(channel: Channel): StreamRequest {
+        val account = current ?: throw IOException("aucun compte ouvert")
+        return repository.resolve(account, channel)
     }
 
     fun onChannelShown(channel: Channel) {

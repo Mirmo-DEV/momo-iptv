@@ -13,7 +13,9 @@ object Http {
             .readTimeout(60, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .addInterceptor { chain ->
-                chain.proceed(chain.request().newBuilder().header("User-Agent", USER_AGENT).build())
+                val request = chain.request()
+                if (request.header("User-Agent") != null) chain.proceed(request)
+                else chain.proceed(request.newBuilder().header("User-Agent", USER_AGENT).build())
             }
             .build()
     }

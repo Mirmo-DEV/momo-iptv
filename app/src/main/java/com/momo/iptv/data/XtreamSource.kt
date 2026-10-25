@@ -14,14 +14,24 @@ import java.io.InputStreamReader
 
 object XtreamSource {
 
-    fun normalizeServer(raw: String): String {
-        var s = raw.trim().trimEnd('/')
+    /** Ce que l'on peut tirer de l'adresse saisie (elle peut être une URL M3U complète « get.php?username=… »). */
+    data class ServerInput(val base: String, val username: String?, val password: String?)
+
+    fun parseServer(raw: String): ServerInput {
+        var s = raw.trim()
         if (!s.startsWith("http://", ignoreCase = true) && !s.startsWith("https://", ignoreCase = true)) s = "http://$s"
-        return s
+        val url = s.toHttpUrlOrNull() ?: return ServerInput(s.trimEnd('/'), null, null)
+        // On ne garde que http(s)://hôte:port : l'API Xtream est toujours à la racine.
+        val port = if (url.port != HttpUrl.defaultPort(url.scheme)) ":${url.port}" else ""
+        return ServerInput(
+            base = "${url.scheme}://${url.host}$port",
+            username = url.queryParameter("username")?.takeIf { it.isNotBlank() },
+            password = url.queryParameter("password")?.takeIf { it.isNotBlank() },
+        )
     }
 
     fun fetch(account: Account): Playlist {
-        val base = normalizeServer(account.server)
+        val base = parseServer(account.server).base
         val api = "$base/player_api.php".toHttpUrlOrNull()
             ?: throw IOException("adresse du serveur invalide")
 
@@ -58,9 +68,15 @@ object XtreamSource {
 
     private fun checkAuth(url: HttpUrl) {
         Http.client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+            if (resp.code == 404) {
+                throw IOException(
+                    "ce serveur ne répond pas comme un serveur Xtream (HTTP 404). Vérifiez l'adresse, " +
+                        "ou choisissez « Portail Stalker » si votre abonnement fonctionne avec une adresse MAC",
+                )
+            }
             if (!resp.isSuccessful) throw IOException("le serveur a répondu HTTP ${resp.code}")
             val root = runCatching { Json.parseToJsonElement(resp.body?.string().orEmpty()) as? JsonObject }.getOrNull()
-                ?: throw IOException("réponse inattendue, vérifiez l'adresse du serveur")
+                ?: throw IOException("réponse inattendue : ce n'est pas un serveur Xtream, vérifiez l'adresse")
             val info = root["user_info"] as? JsonObject ?: throw IOException("identifiants refusés")
             if ((info["auth"] as? JsonPrimitive)?.content != "1") throw IOException("identifiants refusés")
             val status = (info["status"] as? JsonPrimitive)?.content
@@ -71,8 +87,8 @@ object XtreamSource {
     }
 
     /**
-     * Lecture en flux d'un tableau JSON d'objets « plats » : peu de mémoire même avec
-     * des dizaines de milliers de chaînes, et tolérant aux nombres envoyés en texte (ou l'inverse).
+     * Lecture en flux d'un tableau JSON d'objets : peu de mémoire même avec
+     * des dizaines de milliers de chaînes.
      */
     private fun readArray(url: HttpUrl, onItem: (Map<String, String?>) -> Unit) {
         Http.client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
@@ -86,28 +102,5 @@ object XtreamSource {
                 reader.endArray()
             }
         }
-    }
-
-    private fun readFlatObject(reader: JsonReader): Map<String, String?> {
-        if (reader.peek() != JsonToken.BEGIN_OBJECT) {
-            reader.skipValue()
-            return emptyMap()
-        }
-        val map = HashMap<String, String?>()
-        reader.beginObject()
-        while (reader.hasNext()) {
-            val key = reader.nextName()
-            when (reader.peek()) {
-                JsonToken.STRING, JsonToken.NUMBER -> map[key] = reader.nextString()
-                JsonToken.BOOLEAN -> map[key] = reader.nextBoolean().toString()
-                JsonToken.NULL -> {
-                    reader.nextNull()
-                    map[key] = null
-                }
-                else -> reader.skipValue()
-            }
-        }
-        reader.endObject()
-        return map
     }
 }

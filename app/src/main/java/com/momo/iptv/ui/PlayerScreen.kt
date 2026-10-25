@@ -71,7 +71,7 @@ private const val INFO_DURATION_MS = 4_000L
 fun PlayerScreen(vm: AppViewModel, screen: Screen.Player) {
     val channels = screen.channels
     val context = LocalContext.current
-    val live = remember { LivePlayer(context) }
+    val live = remember { LivePlayer(context, vm::resolveStream) }
     val status by live.status.collectAsState()
     var index by remember { mutableIntStateOf(screen.startIndex.coerceIn(0, channels.lastIndex)) }
     var infoTick by remember { mutableIntStateOf(0) }
@@ -110,7 +110,7 @@ fun PlayerScreen(vm: AppViewModel, screen: Screen.Player) {
             live.stop()
             delay(ZAP_DELAY_MS)
         }
-        live.play(channels[index].url)
+        live.play(channels[index])
     }
 
     LaunchedEffect(index, infoTick) {

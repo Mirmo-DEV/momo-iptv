@@ -2,8 +2,6 @@ package com.momo.iptv.player
 
 import android.content.Context
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
@@ -17,16 +15,25 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import com.momo.iptv.data.Channel
 import com.momo.iptv.data.Http
+import com.momo.iptv.data.StreamRequest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Lecteur réglé pour le direct : démarrage rapide, buffer confortable,
- * et reconnexion automatique sans fin tant que l'écran est ouvert.
+ * et reconnexion automatique tant que l'écran est ouvert. Le lien est redemandé
+ * via [resolve] à chaque (re)connexion, car certains (Stalker) expirent.
  */
 @OptIn(UnstableApi::class)
-class LivePlayer(context: Context) {
+class LivePlayer(context: Context, private val resolve: suspend (Channel) -> StreamRequest) {
 
     sealed interface Status {
         data object Idle : Status
@@ -39,10 +46,10 @@ class LivePlayer(context: Context) {
     private val _status = MutableStateFlow<Status>(Status.Idle)
     val status: StateFlow<Status> = _status
 
-    private val handler = Handler(Looper.getMainLooper())
-    private var currentUrl: String? = null
+    private val scope = MainScope()
+    private var job: Job? = null
+    private var channel: Channel? = null
     private var attempts = 0
-    private val retry = Runnable { currentUrl?.let(::load) }
 
     private val listener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -90,17 +97,17 @@ class LivePlayer(context: Context) {
             it.playWhenReady = true
         }
 
-    fun play(url: String) {
-        handler.removeCallbacks(retry)
+    fun play(channel: Channel) {
+        job?.cancel()
         attempts = 0
-        currentUrl = url
+        this.channel = channel
         _status.value = Status.Buffering
-        load(url)
+        job = scope.launch { open(channel) }
     }
 
     fun stop() {
-        handler.removeCallbacks(retry)
-        currentUrl = null
+        job?.cancel()
+        channel = null
         player.stop()
         player.clearMediaItems()
         _status.value = Status.Idle
@@ -108,38 +115,51 @@ class LivePlayer(context: Context) {
 
     /** Appli en arrière-plan : on coupe le flux mais on garde la chaîne en mémoire. */
     fun pauseForBackground() {
-        handler.removeCallbacks(retry)
+        job?.cancel()
         player.stop()
     }
 
     fun resumeFromBackground() {
-        currentUrl?.let(::play)
+        channel?.let(::play)
     }
 
     fun release() {
-        handler.removeCallbacks(retry)
-        currentUrl = null
+        scope.cancel()
+        channel = null
         player.removeListener(listener)
         player.release()
     }
 
-    private fun load(url: String) {
+    private suspend fun open(channel: Channel) {
+        val request = try {
+            resolve(channel)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            scheduleRetry(e.message ?: "lien de lecture indisponible")
+            return
+        }
+        httpFactory.setUserAgent(request.userAgent).setDefaultRequestProperties(request.headers)
         // Recharger l'élément repart du point « direct ».
-        player.setMediaItem(mediaItem(url))
+        player.setMediaItem(mediaItem(request.url))
         player.prepare()
         player.play()
     }
 
     private fun scheduleRetry(reason: String) {
-        if (currentUrl == null) return
+        val current = channel ?: return
         attempts++
         if (attempts > MAX_ATTEMPTS) {
             _status.value = Status.Failed(reason)
             return
         }
         _status.value = Status.Reconnecting(attempts, reason)
-        handler.removeCallbacks(retry)
-        handler.postDelayed(retry, (1_000L shl (attempts - 1).coerceAtMost(3)))
+        val wait = 1_000L shl (attempts - 1).coerceAtMost(3)
+        job?.cancel()
+        job = scope.launch {
+            delay(wait)
+            open(current)
+        }
     }
 
     private fun mediaItem(url: String): MediaItem {

@@ -1,13 +1,16 @@
 package com.momo.iptv.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -21,23 +24,26 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.momo.iptv.AppViewModel
 import com.momo.iptv.data.Account
 import com.momo.iptv.data.SourceType
+import com.momo.iptv.data.StalkerClient
 import com.momo.iptv.data.XtreamSource
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.util.UUID
+
+private const val MAC_PREFIX = "00:1A:79:"
 
 @Composable
 fun AccountEditScreen(vm: AppViewModel, existing: Account?) {
@@ -47,6 +53,7 @@ fun AccountEditScreen(vm: AppViewModel, existing: Account?) {
     var username by remember { mutableStateOf(existing?.username ?: "") }
     var password by remember { mutableStateOf(existing?.password ?: "") }
     var m3uUrl by remember { mutableStateOf(existing?.m3uUrl ?: "") }
+    var mac by remember { mutableStateOf(existing?.mac?.ifEmpty { null } ?: MAC_PREFIX) }
     var useHls by remember { mutableStateOf(existing?.useHls ?: false) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -59,28 +66,46 @@ fun AccountEditScreen(vm: AppViewModel, existing: Account?) {
     }
 
     fun save() {
+        // Adresse Xtream collée sous forme d'URL complète : on récupère identifiant et mot de passe.
+        if (type == SourceType.XTREAM) {
+            val parsed = XtreamSource.parseServer(server)
+            if (username.isBlank()) parsed.username?.let { username = it }
+            if (password.isBlank()) parsed.password?.let { password = it }
+        }
         error = when (type) {
             SourceType.XTREAM -> when {
                 server.isBlank() -> "Indiquez l'adresse du serveur"
-                "${XtreamSource.normalizeServer(server)}/".toHttpUrlOrNull() == null -> "Adresse du serveur invalide"
+                "${XtreamSource.parseServer(server).base}/".toHttpUrlOrNull() == null -> "Adresse du serveur invalide"
                 username.isBlank() -> "Indiquez le nom d'utilisateur"
                 password.isBlank() -> "Indiquez le mot de passe"
                 else -> null
             }
-            SourceType.M3U -> if (m3uUrl.trim().toHttpUrlOrNull() == null) "URL M3U invalide (elle doit commencer par http:// ou https://)" else null
+            SourceType.M3U ->
+                if (m3uUrl.trim().toHttpUrlOrNull() == null) "URL M3U invalide (elle doit commencer par http:// ou https://)" else null
+            SourceType.STALKER -> when {
+                server.isBlank() -> "Indiquez l'adresse du portail"
+                !StalkerClient.isValidMac(mac) -> "Adresse MAC invalide (format 00:1A:79:XX:XX:XX)"
+                else -> null
+            }
         }
         if (error != null) return
-        val defaultName = if (type == SourceType.XTREAM) "Xtream" else "Liste M3U"
+        val defaultName = when (type) {
+            SourceType.XTREAM -> "Xtream"
+            SourceType.M3U -> "Liste M3U"
+            SourceType.STALKER -> "Portail Stalker"
+        }
+        val usesServer = type == SourceType.XTREAM || type == SourceType.STALKER
         vm.saveAccount(
             Account(
                 id = existing?.id ?: UUID.randomUUID().toString(),
                 name = name.trim().ifEmpty { defaultName },
                 type = type,
-                server = if (type == SourceType.XTREAM) server.trim() else "",
+                server = if (usesServer) server.trim() else "",
                 username = if (type == SourceType.XTREAM) username.trim() else "",
                 password = if (type == SourceType.XTREAM) password.trim() else "",
                 m3uUrl = if (type == SourceType.M3U) m3uUrl.trim() else "",
                 useHls = type == SourceType.XTREAM && useHls,
+                mac = if (type == SourceType.STALKER) StalkerClient.normalizeMac(mac) else "",
             ),
         )
     }
@@ -89,24 +114,30 @@ fun AccountEditScreen(vm: AppViewModel, existing: Account?) {
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 140.dp, vertical = 36.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(horizontal = 140.dp, vertical = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(if (existing == null) "Nouveau compte" else "Modifier le compte", fontSize = 30.sp, fontWeight = FontWeight.Bold)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Choice("Xtream Codes", type == SourceType.XTREAM, Modifier.focusRequester(firstFocus)) { type = SourceType.XTREAM }
             Choice("Liste M3U", type == SourceType.M3U) { type = SourceType.M3U }
+            Choice("Portail Stalker (MAC)", type == SourceType.STALKER) { type = SourceType.STALKER }
         }
-        Field("Nom du compte (facultatif)", name) { name = it }
-        if (type == SourceType.XTREAM) {
-            Field("Adresse du serveur (ex : http://exemple.com:8080)", server, KeyboardType.Uri) { server = it }
-            Field("Nom d'utilisateur", username) { username = it }
-            Field("Mot de passe", password, KeyboardType.Password, isPassword = true) { password = it }
-            Choice(if (useHls) "Format du flux : HLS (.m3u8)" else "Format du flux : MPEG-TS (.ts) — recommandé", false) {
-                useHls = !useHls
+        FieldRow("Nom du compte (facultatif)", name) { name = it }
+        when (type) {
+            SourceType.XTREAM -> {
+                FieldRow("Adresse du serveur (ex : http://exemple.com:8080)", server, KeyboardType.Uri) { server = it }
+                FieldRow("Nom d'utilisateur", username) { username = it }
+                FieldRow("Mot de passe", password, hidden = true) { password = it }
+                Choice(if (useHls) "Format du flux : HLS (.m3u8)" else "Format du flux : MPEG-TS (.ts) — recommandé", false) {
+                    useHls = !useHls
+                }
             }
-        } else {
-            Field("URL de la liste M3U", m3uUrl, KeyboardType.Uri) { m3uUrl = it }
+            SourceType.M3U -> FieldRow("URL de la liste M3U", m3uUrl, KeyboardType.Uri) { m3uUrl = it }
+            SourceType.STALKER -> {
+                FieldRow("Adresse du portail (ex : http://exemple.com:8080/c/)", server, KeyboardType.Uri) { server = it }
+                FieldRow("Adresse MAC (ex : 00:1A:79:12:34:56)", mac) { mac = it.uppercase() }
+            }
         }
         error?.let { Text(it, color = Palette.Error, fontSize = 16.sp) }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -119,7 +150,7 @@ fun AccountEditScreen(vm: AppViewModel, existing: Account?) {
             }
         }
         Text(
-            "OK sur un champ pour ouvrir le clavier. Vos identifiants restent uniquement sur cet appareil.",
+            "▲▼ pour choisir un champ, OK pour le remplir. Vos identifiants restent uniquement sur cet appareil.",
             fontSize = 14.sp,
             color = Palette.TextDim,
         )
@@ -133,23 +164,85 @@ private fun Choice(label: String, selected: Boolean, modifier: Modifier = Modifi
     }
 }
 
+/**
+ * Champ affiché comme une ligne ordinaire : le focus peut passer dessus sans rien ouvrir.
+ * OK ouvre une fenêtre de saisie avec le clavier.
+ */
 @Composable
-private fun Field(
+private fun FieldRow(
     label: String,
     value: String,
     keyboardType: KeyboardType = KeyboardType.Text,
-    isPassword: Boolean = false,
+    hidden: Boolean = false,
     onChange: (String) -> Unit,
 ) {
-    val focusManager = LocalFocusManager.current
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = { Text(label) },
-        singleLine = true,
-        visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Next),
-        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-        modifier = Modifier.fillMaxWidth(),
-    )
+    var editing by remember { mutableStateOf(false) }
+    TvItem(onClick = { editing = true }, modifier = Modifier.fillMaxWidth()) { focused ->
+        Column(Modifier.weight(1f)) {
+            Text(label, fontSize = 14.sp, color = if (focused) Palette.Text else Palette.TextDim)
+            Text(
+                when {
+                    value.isEmpty() -> "Appuyez sur OK pour saisir"
+                    hidden -> "•".repeat(value.length)
+                    else -> value
+                },
+                fontSize = 19.sp,
+                color = if (value.isEmpty() && !focused) Palette.TextDim else Palette.Text,
+            )
+        }
+        Text("✎", fontSize = 18.sp)
+    }
+    if (editing) {
+        TextEntryDialog(
+            label = label,
+            initial = value,
+            keyboardType = keyboardType,
+            onDone = {
+                onChange(it)
+                editing = false
+            },
+            onCancel = { editing = false },
+        )
+    }
+}
+
+@Composable
+private fun TextEntryDialog(
+    label: String,
+    initial: String,
+    keyboardType: KeyboardType,
+    onDone: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var text by remember { mutableStateOf(TextFieldValue(initial, TextRange(initial.length))) }
+    Dialog(onDismissRequest = onCancel) {
+        val focus = remember { FocusRequester() }
+        val keyboard = LocalSoftwareKeyboardController.current
+        LaunchedEffect(Unit) {
+            withFrameNanos { }
+            runCatching { focus.requestFocus() }
+            keyboard?.show()
+        }
+        Column(
+            Modifier
+                .width(760.dp)
+                .background(Palette.Panel, RoundedCornerShape(16.dp))
+                .padding(28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(label, fontSize = 20.sp, color = Palette.Text)
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onDone(text.text.trim()) }),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                TvButton("Valider", { onDone(text.text.trim()) })
+                TvButton("Annuler", onCancel)
+            }
+        }
+    }
 }

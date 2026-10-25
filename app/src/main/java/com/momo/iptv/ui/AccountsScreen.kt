@@ -82,6 +82,7 @@ fun AccountsScreen(vm: AppViewModel) {
 private fun describe(account: Account): String = when (account.type) {
     SourceType.XTREAM -> "Xtream Codes · " + host(account.server)
     SourceType.M3U -> "Liste M3U · " + host(account.m3uUrl)
+    SourceType.STALKER -> "Portail Stalker · " + host(account.server)
 }
 
 private fun host(url: String): String {

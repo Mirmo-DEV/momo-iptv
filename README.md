@@ -2,7 +2,7 @@
 
 Application IPTV pour Fire TV Stick (Android TV), pensée pour la télécommande.
 
-**V1** : comptes Xtream Codes et listes M3U, chaînes en direct par catégories, zapping haut/bas,
+**V1** : comptes Xtream Codes, listes M3U et portails Stalker (MAC), chaînes en direct par catégories, zapping haut/bas,
 favoris (touche Menu ≡), plusieurs comptes, liste en cache (affichage instantané), reconnexion automatique.
 
 Aucun identifiant n'est dans le code : les comptes se saisissent dans l'appli et restent sur la Fire Stick.
@@ -48,4 +48,4 @@ La clé de signature est stockée dans les secrets du dépôt (`SIGNING_KEYSTORE
 ## Feuille de route
 
 - **V2** : guide TV (EPG), films et séries avec reprise de lecture
-- **V3** : portail Stalker, replay
+- **V3** : replay (le portail Stalker est déjà disponible)
